@@ -563,8 +563,10 @@ class ArcaDatabase {
       type: 'added',
       card_name: newInst.card_name,
       count: 1,
-      to_location: newInst.location_id,
-      details: `Added into batch ${newInst.location_id || 'unassigned'}`
+      to_location: newInst.location_id || 'Brewing/Decks',
+      details: `Added into batch ${newInst.location_id || 'Brewing'}`,
+      instance_id: newInst.instance_id,
+      instance_snapshot: { ...newInst }
     });
 
     this.notify();
@@ -593,7 +595,9 @@ class ArcaDatabase {
         count: 1,
         from_location: fromLoc,
         to_location: 'Brewing/Decks',
-        details: `Checked out from ${fromLoc} to Brewing pool`
+        details: `Checked out from ${fromLoc} to Brewing pool`,
+        instance_id: instanceId,
+        instance_snapshot: { ...existing }
       });
 
       this.notify();
@@ -621,7 +625,9 @@ class ArcaDatabase {
         count: 1,
         from_location: 'Brewing/Decks',
         to_location: locationId,
-        details: `Returned from brewing to drawer ${locationId}`
+        details: `Returned from brewing to drawer ${locationId}`,
+        instance_id: instanceId,
+        instance_snapshot: { ...existing }
       });
 
       this.notify();
@@ -650,7 +656,9 @@ class ArcaDatabase {
         count: 1,
         from_location: oldLoc,
         to_location: locationId,
-        details: `Relocated from ${oldLoc} to ${locationId}`
+        details: `Relocated from ${oldLoc} to ${locationId}`,
+        instance_id: instanceId,
+        instance_snapshot: { ...existing }
       });
 
       this.notify();
@@ -672,7 +680,9 @@ class ArcaDatabase {
         card_name: existing.card_name,
         count: 1,
         from_location: existing.location_id || 'Brewing/Decks',
-        details: `Removed from collection (Sold / Traded)`
+        details: `Removed from collection (Sold / Traded)`,
+        instance_id: instanceId,
+        instance_snapshot: { ...existing }
       });
 
       this.notify();
@@ -693,7 +703,9 @@ class ArcaDatabase {
       card_name: instance.card_name,
       count: 1,
       to_location: instance.location_id || 'Brewing/Decks',
-      details: `Restored back to ${instance.location_id || 'Brewing'} (Undo)`
+      details: `Restored back to ${instance.location_id || 'Brewing'} (Undo)`,
+      instance_id: instance.instance_id,
+      instance_snapshot: { ...instance }
     });
 
     this.notify();
@@ -712,6 +724,158 @@ class ArcaDatabase {
     };
     this.history.unshift(newEntry);
     this.saveHistory();
+  }
+
+  /**
+   * Toggles undo / redo for a specific history log item.
+   * If not undone, takes cards back to where they were before that action.
+   * If already undone, re-applies the original action (undoing the undo!).
+   */
+  public undoActivity(logId: string): boolean {
+    const item = this.history.find(h => h.id === logId);
+    if (!item) return false;
+
+    const isCurrentlyUndone = !!item.undone;
+
+    if (!isCurrentlyUndone) {
+      // === PERFORM UNDO ===
+      // Take cards back to where they were before that action
+      if (item.type === 'moved') {
+        let inst = item.instance_id ? this.instances.get(item.instance_id) : undefined;
+        if (!inst) {
+          for (const cand of this.instances.values()) {
+            if (cand.card_name.trim().toLowerCase() === item.card_name.trim().toLowerCase()) {
+              if (item.to_location === 'Brewing/Decks' && cand.state === 'B') {
+                inst = cand;
+                break;
+              } else if (cand.location_id === item.to_location) {
+                inst = cand;
+                break;
+              }
+            }
+          }
+        }
+
+        if (inst) {
+          const wasInBrewing = item.from_location === 'Brewing/Decks' || !item.from_location;
+          this.instances.set(inst.instance_id, {
+            ...inst,
+            state: wasInBrewing ? 'B' : 'A',
+            location_id: wasInBrewing ? null : (item.from_location || null),
+            updated_at: new Date().toISOString()
+          });
+          this.saveInstances();
+          this.touchUpdated();
+        }
+      } else if (item.type === 'added') {
+        let inst = item.instance_id ? this.instances.get(item.instance_id) : undefined;
+        if (!inst) {
+          for (const cand of this.instances.values()) {
+            if (cand.card_name.trim().toLowerCase() === item.card_name.trim().toLowerCase()) {
+              if (item.to_location === 'Brewing/Decks' && cand.state === 'B') {
+                inst = cand;
+                break;
+              } else if (cand.location_id === item.to_location) {
+                inst = cand;
+                break;
+              }
+            }
+          }
+        }
+
+        if (inst) {
+          item.instance_snapshot = { ...inst };
+          this.instances.delete(inst.instance_id);
+          this.saveInstances();
+          this.touchUpdated();
+        }
+      } else if (item.type === 'removed') {
+        const meta = this.getCard(item.card_name);
+        const wasInBrewing = item.from_location === 'Brewing/Decks' || !item.from_location;
+        const restored: CardInstance = item.instance_snapshot || {
+          instance_id: item.instance_id || generateUUID(),
+          oracle_id: meta?.oracle_id || generateUUID(),
+          card_name: meta?.name || item.card_name,
+          state: wasInBrewing ? 'B' : 'A',
+          location_id: wasInBrewing ? null : (item.from_location || '1.A.01'),
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        };
+
+        this.instances.set(restored.instance_id, restored);
+        this.saveInstances();
+        this.touchUpdated();
+      }
+
+      item.undone = true;
+      this.saveHistory();
+      this.notify();
+      return true;
+    } else {
+      // === PERFORM REDO (UNDO-ABLE UNDO) ===
+      if (item.type === 'moved') {
+        let inst = item.instance_id ? this.instances.get(item.instance_id) : undefined;
+        if (!inst) {
+          for (const cand of this.instances.values()) {
+            if (cand.card_name.trim().toLowerCase() === item.card_name.trim().toLowerCase()) {
+              if (item.from_location === 'Brewing/Decks' && cand.state === 'B') {
+                inst = cand;
+                break;
+              } else if (cand.location_id === item.from_location) {
+                inst = cand;
+                break;
+              }
+            }
+          }
+        }
+
+        if (inst) {
+          const isGoingToBrewing = item.to_location === 'Brewing/Decks' || !item.to_location;
+          this.instances.set(inst.instance_id, {
+            ...inst,
+            state: isGoingToBrewing ? 'B' : 'A',
+            location_id: isGoingToBrewing ? null : (item.to_location || null),
+            updated_at: new Date().toISOString()
+          });
+          this.saveInstances();
+          this.touchUpdated();
+        }
+      } else if (item.type === 'added') {
+        const meta = this.getCard(item.card_name);
+        const isGoingToBrewing = item.to_location === 'Brewing/Decks';
+        const restored: CardInstance = item.instance_snapshot || {
+          instance_id: item.instance_id || generateUUID(),
+          oracle_id: meta?.oracle_id || generateUUID(),
+          card_name: meta?.name || item.card_name,
+          state: isGoingToBrewing ? 'B' : 'A',
+          location_id: isGoingToBrewing ? null : (item.to_location || '1.A.01'),
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        };
+
+        this.instances.set(restored.instance_id, restored);
+        this.saveInstances();
+        this.touchUpdated();
+      } else if (item.type === 'removed') {
+        if (item.instance_id && this.instances.has(item.instance_id)) {
+          this.instances.delete(item.instance_id);
+        } else {
+          for (const [id, cand] of this.instances.entries()) {
+            if (cand.card_name.trim().toLowerCase() === item.card_name.trim().toLowerCase()) {
+              this.instances.delete(id);
+              break;
+            }
+          }
+        }
+        this.saveInstances();
+        this.touchUpdated();
+      }
+
+      item.undone = false;
+      this.saveHistory();
+      this.notify();
+      return true;
+    }
   }
 
   public clearHistory(): void {

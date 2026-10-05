@@ -62,4 +62,7 @@ export interface ActivityLogItem {
   to_location?: string | null;
   timestamp: string;
   details?: string;
+  instance_id?: string;
+  instance_snapshot?: CardInstance;
+  undone?: boolean;
 }

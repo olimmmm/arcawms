@@ -68,6 +68,17 @@ export const IngestEngine: React.FC = () => {
     }
   };
 
+  // Undo / Redo history item handler
+  const handleToggleUndo = (logId: string) => {
+    playSound('pull');
+    triggerHaptic('medium');
+    const ok = db.undoActivity(logId);
+    if (ok) {
+      setHistory(db.getHistory());
+      setInstances(db.getAllInstances());
+    }
+  };
+
   // Ingestion handler supporting all 3 modes
   const handleIngest = async () => {
     const parsed = parseDecklistText(rawText);
@@ -501,22 +512,50 @@ export const IngestEngine: React.FC = () => {
                 'bg-rose-500/20 text-rose-400 border-rose-500/30';
 
               return (
-                <div key={item.id} className="p-3 flex items-center justify-between text-xs gap-3">
+                <div 
+                  key={item.id} 
+                  className={`p-3 flex items-center justify-between text-xs gap-3 transition ${
+                    item.undone ? 'bg-slate-950/40 opacity-75' : ''
+                  }`}
+                >
                   <div className="flex items-center gap-2.5 min-w-0">
                     <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase border ${badgeBg}`}>
                       {item.type}
                     </span>
                     <div className="truncate">
-                      <span className="font-bold text-white mr-2">{item.card_name}</span>
-                      <span className="text-slate-400 text-[11px] font-mono">
+                      <span className={`font-bold mr-2 ${item.undone ? 'text-slate-400 line-through' : 'text-white'}`}>
+                        {item.card_name}
+                      </span>
+                      <span className={`text-[11px] font-mono ${item.undone ? 'text-slate-500 line-through' : 'text-slate-400'}`}>
                         {item.details || (item.from_location ? `${item.from_location} ➔ ${item.to_location}` : item.to_location)}
                       </span>
+                      {item.undone && (
+                        <span className="ml-2 text-[10px] font-mono text-amber-400 font-bold bg-amber-400/10 px-1.5 py-0.5 rounded border border-amber-400/30">
+                          Undone
+                        </span>
+                      )}
                     </div>
                   </div>
 
-                  <span className="text-[10px] font-mono text-slate-500 shrink-0">
-                    {formatTimestamp(item.timestamp)}
-                  </span>
+                  <div className="flex items-center gap-2.5 shrink-0">
+                    <span className="text-[10px] font-mono text-slate-500 hidden sm:inline">
+                      {formatTimestamp(item.timestamp)}
+                    </span>
+
+                    {/* Interactive Undo / Redo Toggle Button */}
+                    <button
+                      onClick={() => handleToggleUndo(item.id)}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-mono font-bold flex items-center gap-1.5 shadow transition cursor-pointer ${
+                        item.undone
+                          ? 'bg-amber-500/20 text-amber-300 hover:bg-amber-500/30 border border-amber-500/40'
+                          : 'bg-slate-800 text-slate-200 hover:bg-slate-700 hover:text-white border border-slate-700'
+                      }`}
+                      title={item.undone ? 'Undo this undo (Redo)' : 'Undo this action (takes cards back to where they were)'}
+                    >
+                      <RotateCcw className={`h-3 w-3 ${item.undone ? 'rotate-180 text-amber-400' : 'text-slate-400'}`} />
+                      <span>{item.undone ? 'Redo ↻' : 'Undo ↺'}</span>
+                    </button>
+                  </div>
                 </div>
               );
             })}
