@@ -12,12 +12,14 @@ import {
   FileSpreadsheet,
   ShieldCheck,
   Clock,
-  ChevronRight
+  ChevronRight,
+  Sparkles
 } from 'lucide-react';
 import { db } from '../services/db';
 import { syncClient } from '../services/sync';
 import { playSound } from '../services/audio';
 import { GUILD_THEMES, GuildThemeId, applyTheme, getActiveTheme } from '../services/theme';
+import { enrichMissingCards } from '../services/scryfall';
 
 interface SettingsSyncModalProps {
   isOpen: boolean;
@@ -32,8 +34,25 @@ export const SettingsSyncModal: React.FC<SettingsSyncModalProps> = ({
 }) => {
   const [activeThemeId, setActiveThemeId] = useState<GuildThemeId>(() => getActiveTheme());
   const [importStatus, setImportStatus] = useState<string | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [snapshots, setSnapshots] = useState<Array<{ id: string; timestamp: string; label: string; cardCount: number }>>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleRefreshMetadata = async () => {
+    playSound('click');
+    setIsRefreshing(true);
+    setImportStatus('Contacting Scryfall CDN to resolve images & prices...');
+    try {
+      const updated = await enrichMissingCards();
+      playSound('success');
+      setImportStatus(`Successfully updated images & prices for ${updated} cards!`);
+    } catch {
+      playSound('error');
+      setImportStatus('Failed to refresh some card data. Check internet connection.');
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
 
   useEffect(() => {
     if (isOpen) {
@@ -237,6 +256,16 @@ export const SettingsSyncModal: React.FC<SettingsSyncModalProps> = ({
               <span className="text-[10px] text-slate-500">Restore from JSON</span>
             </button>
           </div>
+
+          {/* Refresh Images & Prices on Demand */}
+          <button
+            onClick={handleRefreshMetadata}
+            disabled={isRefreshing}
+            className="w-full py-2.5 px-3 rounded-xl bg-slate-950 hover:bg-slate-850 text-xs font-mono text-slate-300 hover:text-white border border-slate-800 flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-50"
+          >
+            <Sparkles className={`h-3.5 w-3.5 text-theme-primary ${isRefreshing ? 'animate-spin' : ''}`} />
+            <span>{isRefreshing ? 'Resolving Scryfall CDN images & prices...' : 'Refresh Missing Card Images & Market Prices'}</span>
+          </button>
 
           <input
             type="file"

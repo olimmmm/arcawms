@@ -13,7 +13,7 @@ import {
 import { CardInstance, ScryfallCard } from '../types';
 import { db } from '../services/db';
 import { parseLocationId } from '../services/pickPath';
-import { getScryfallImageFallback } from '../services/scryfall';
+import { getScryfallImageFallback, CARD_BACK_IMAGE, enrichMissingCards } from '../services/scryfall';
 import { playSound, triggerHaptic } from '../services/audio';
 
 export const SkeuomorphicViewer: React.FC = () => {
@@ -38,6 +38,10 @@ export const SkeuomorphicViewer: React.FC = () => {
       setCards(db.getAllCards());
     });
   }, []);
+
+  useEffect(() => {
+    enrichMissingCards();
+  }, [selectedBatch]);
 
   const cardDictionary = useMemo(() => {
     const map = new Map<string, ScryfallCard>();
@@ -319,7 +323,7 @@ export const SkeuomorphicViewer: React.FC = () => {
                         loading="lazy"
                         className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
                         onError={(e) => {
-                          e.currentTarget.src = getScryfallImageFallback(inst.card_name);
+                          e.currentTarget.src = CARD_BACK_IMAGE;
                         }}
                       />
 

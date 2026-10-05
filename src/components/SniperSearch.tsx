@@ -16,7 +16,15 @@ import {
 } from 'lucide-react';
 import { CardInstance, ScryfallCard } from '../types';
 import { db } from '../services/db';
-import { parseSyntaxQuery, cardMatchesSyntax, searchScryfallAPI, scryfallAutocomplete, getScryfallImageFallback } from '../services/scryfall';
+import { 
+  parseSyntaxQuery, 
+  cardMatchesSyntax, 
+  searchScryfallAPI, 
+  scryfallAutocomplete, 
+  getScryfallImageFallback, 
+  CARD_BACK_IMAGE, 
+  enrichMissingCards 
+} from '../services/scryfall';
 import { formatLocationId, parseLocationId } from '../services/pickPath';
 import { playSound, triggerHaptic } from '../services/audio';
 
@@ -54,6 +62,7 @@ export const SniperSearch: React.FC = () => {
   const [cards, setCards] = useState<ScryfallCard[]>(() => db.getAllCards());
 
   useEffect(() => {
+    enrichMissingCards();
     return db.subscribe(() => {
       setInstances(db.getAllInstances());
       setCards(db.getAllCards());
@@ -346,10 +355,7 @@ export const SniperSearch: React.FC = () => {
                   loading="lazy"
                   className="w-full h-auto object-cover"
                   onError={(e) => {
-                    const fallback = getScryfallImageFallback(card.name);
-                    if (e.currentTarget.src !== fallback) {
-                      e.currentTarget.src = fallback;
-                    }
+                    e.currentTarget.src = CARD_BACK_IMAGE;
                   }}
                 />
               </div>

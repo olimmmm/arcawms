@@ -13,7 +13,7 @@ export type GuildThemeId =
 export interface GuildTheme {
   id: GuildThemeId;
   name: string;
-  colors: string; // MTG colors, e.g. "White / Blue"
+  colors: string; // MTG colors, e.g. "White / Black"
   guild: string;
   primaryHex: string;
   accentHex: string;
@@ -26,9 +26,9 @@ export const GUILD_THEMES: GuildTheme[] = [
     name: 'Orzhov',
     colors: 'White / Black',
     guild: 'W/B',
-    primaryHex: '#f59e0b',
-    accentHex: '#f1f5f9',
-    description: 'Aristocratic gold & obsidian silver'
+    primaryHex: '#ffffff',
+    accentHex: '#09090b',
+    description: 'Syndicate stark marble white & obsidian jet black'
   },
   {
     id: 'azorius',
@@ -36,8 +36,8 @@ export const GUILD_THEMES: GuildTheme[] = [
     colors: 'White / Blue',
     guild: 'W/U',
     primaryHex: '#38bdf8',
-    accentHex: '#f8fafc',
-    description: 'Senate azure blue & alabaster law'
+    accentHex: '#ffffff',
+    description: 'Senate azure blue & alabaster silver'
   },
   {
     id: 'dimir',
@@ -45,17 +45,17 @@ export const GUILD_THEMES: GuildTheme[] = [
     colors: 'Blue / Black',
     guild: 'U/B',
     primaryHex: '#06b6d4',
-    accentHex: '#818cf8',
-    description: 'Shadow cobalt & stealth indigo'
+    accentHex: '#09090b',
+    description: 'Shadow cobalt cyan & stealth obsidian black'
   },
   {
     id: 'rakdos',
     name: 'Rakdos',
     colors: 'Black / Red',
     guild: 'B/R',
-    primaryHex: '#f43f5e',
-    accentHex: '#fb923c',
-    description: 'Carnival crimson & ember flare'
+    primaryHex: '#ef4444',
+    accentHex: '#09090b',
+    description: 'Carnival flame red & midnight jet black'
   },
   {
     id: 'gruul',
@@ -63,8 +63,8 @@ export const GUILD_THEMES: GuildTheme[] = [
     colors: 'Red / Green',
     guild: 'R/G',
     primaryHex: '#f97316',
-    accentHex: '#4ade80',
-    description: 'Wild terracotta red & jungle moss'
+    accentHex: '#22c55e',
+    description: 'Wild terracotta red & jungle moss green'
   },
   {
     id: 'selesnya',
@@ -72,26 +72,26 @@ export const GUILD_THEMES: GuildTheme[] = [
     colors: 'Green / White',
     guild: 'G/W',
     primaryHex: '#10b981',
-    accentHex: '#fef08a',
-    description: 'Verdant canopy emerald & sunlit dawn'
+    accentHex: '#ffffff',
+    description: 'Verdant canopy emerald & sunlit dawn white'
   },
   {
     id: 'izzet',
     name: 'Izzet',
     colors: 'Blue / Red',
     guild: 'U/R',
-    primaryHex: '#00f0ff',
-    accentHex: '#f43f5e',
-    description: 'Lightning arc cyan & boiler scarlet'
+    primaryHex: '#0284c7',
+    accentHex: '#ef4444',
+    description: 'Lightning arc blue & boiler scarlet red'
   },
   {
     id: 'golgari',
     name: 'Golgari',
     colors: 'Black / Green',
     guild: 'B/G',
-    primaryHex: '#84cc16',
-    accentHex: '#10b981',
-    description: 'Under-city lichen lime & rot jade'
+    primaryHex: '#22c55e',
+    accentHex: '#09090b',
+    description: 'Under-city rot green & deep shadow black'
   },
   {
     id: 'boros',
@@ -99,17 +99,17 @@ export const GUILD_THEMES: GuildTheme[] = [
     colors: 'Red / White',
     guild: 'R/W',
     primaryHex: '#ef4444',
-    accentHex: '#fef08a',
-    description: 'Legion flame red & sunburst ivory'
+    accentHex: '#ffffff',
+    description: 'Legion flame red & sunburst ivory white'
   },
   {
     id: 'simic',
     name: 'Simic',
     colors: 'Green / Blue',
     guild: 'G/U',
-    primaryHex: '#14b8a6',
-    accentHex: '#38bdf8',
-    description: 'Bioluminescent deep teal & seafoam cyan'
+    primaryHex: '#10b981',
+    accentHex: '#06b6d4',
+    description: 'Bioluminescent deep green & seafoam marine blue'
   }
 ];
 
@@ -122,7 +122,7 @@ export function getActiveTheme(): GuildThemeId {
       return saved;
     }
   } catch {}
-  return 'orzhov'; // Default warm MTG artifact gold
+  return 'orzhov'; // Default crisp MTG White & Black
 }
 
 export function applyTheme(themeId: GuildThemeId) {

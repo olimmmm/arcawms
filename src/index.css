@@ -10,16 +10,16 @@
   }
 }
 
-/* Default / Orzhov (Gold & Platinum) */
+/* Default / Orzhov (White & Black - W/B) */
 :root,
 [data-theme="orzhov"] {
-  --theme-primary: #f59e0b;
-  --theme-primary-hover: #fbbf24;
-  --theme-primary-text: #020617;
-  --theme-accent: #f8fafc;
-  --theme-subtle-bg: rgba(245, 158, 11, 0.12);
-  --theme-subtle-border: rgba(245, 158, 11, 0.35);
-  --theme-glow: rgba(245, 158, 11, 0.25);
+  --theme-primary: #ffffff;
+  --theme-primary-hover: #e2e8f0;
+  --theme-primary-text: #09090b;
+  --theme-accent: #a1a1aa;
+  --theme-subtle-bg: rgba(255, 255, 255, 0.12);
+  --theme-subtle-border: rgba(255, 255, 255, 0.35);
+  --theme-glow: rgba(255, 255, 255, 0.25);
 }
 
 /* Azorius (White & Blue - W/U) */
@@ -27,7 +27,7 @@
   --theme-primary: #38bdf8;
   --theme-primary-hover: #7dd3fc;
   --theme-primary-text: #020617;
-  --theme-accent: #f8fafc;
+  --theme-accent: #ffffff;
   --theme-subtle-bg: rgba(56, 189, 248, 0.12);
   --theme-subtle-border: rgba(56, 189, 248, 0.35);
   --theme-glow: rgba(56, 189, 248, 0.25);
@@ -38,7 +38,7 @@
   --theme-primary: #06b6d4;
   --theme-primary-hover: #22d3ee;
   --theme-primary-text: #020617;
-  --theme-accent: #a5b4fc;
+  --theme-accent: #09090b;
   --theme-subtle-bg: rgba(6, 182, 212, 0.12);
   --theme-subtle-border: rgba(6, 182, 212, 0.35);
   --theme-glow: rgba(6, 182, 212, 0.25);
@@ -46,13 +46,13 @@
 
 /* Rakdos (Black & Red - B/R) */
 [data-theme="rakdos"] {
-  --theme-primary: #f43f5e;
-  --theme-primary-hover: #fb7185;
-  --theme-primary-text: #020617;
-  --theme-accent: #fdba74;
-  --theme-subtle-bg: rgba(244, 63, 94, 0.12);
-  --theme-subtle-border: rgba(244, 63, 94, 0.35);
-  --theme-glow: rgba(244, 63, 94, 0.25);
+  --theme-primary: #ef4444;
+  --theme-primary-hover: #f87171;
+  --theme-primary-text: #ffffff;
+  --theme-accent: #09090b;
+  --theme-subtle-bg: rgba(239, 68, 68, 0.14);
+  --theme-subtle-border: rgba(239, 68, 68, 0.4);
+  --theme-glow: rgba(239, 68, 68, 0.25);
 }
 
 /* Gruul (Red & Green - R/G) */
@@ -60,7 +60,7 @@
   --theme-primary: #f97316;
   --theme-primary-hover: #fb923c;
   --theme-primary-text: #020617;
-  --theme-accent: #4ade80;
+  --theme-accent: #22c55e;
   --theme-subtle-bg: rgba(249, 115, 22, 0.12);
   --theme-subtle-border: rgba(249, 115, 22, 0.35);
   --theme-glow: rgba(249, 115, 22, 0.25);
@@ -71,7 +71,7 @@
   --theme-primary: #10b981;
   --theme-primary-hover: #34d399;
   --theme-primary-text: #020617;
-  --theme-accent: #fef08a;
+  --theme-accent: #ffffff;
   --theme-subtle-bg: rgba(16, 185, 129, 0.12);
   --theme-subtle-border: rgba(16, 185, 129, 0.35);
   --theme-glow: rgba(16, 185, 129, 0.25);
@@ -79,46 +79,46 @@
 
 /* Izzet (Blue & Red - U/R) */
 [data-theme="izzet"] {
-  --theme-primary: #00f0ff;
-  --theme-primary-hover: #67e8f9;
-  --theme-primary-text: #020617;
-  --theme-accent: #f43f5e;
-  --theme-subtle-bg: rgba(0, 240, 255, 0.12);
-  --theme-subtle-border: rgba(0, 240, 255, 0.35);
-  --theme-glow: rgba(0, 240, 255, 0.25);
+  --theme-primary: #0284c7;
+  --theme-primary-hover: #38bdf8;
+  --theme-primary-text: #ffffff;
+  --theme-accent: #ef4444;
+  --theme-subtle-bg: rgba(2, 132, 199, 0.14);
+  --theme-subtle-border: rgba(2, 132, 199, 0.35);
+  --theme-glow: rgba(2, 132, 199, 0.25);
 }
 
 /* Golgari (Black & Green - B/G) */
 [data-theme="golgari"] {
-  --theme-primary: #84cc16;
-  --theme-primary-hover: #a3e635;
-  --theme-primary-text: #020617;
-  --theme-accent: #34d399;
-  --theme-subtle-bg: rgba(132, 204, 22, 0.12);
-  --theme-subtle-border: rgba(132, 204, 22, 0.35);
-  --theme-glow: rgba(132, 204, 22, 0.25);
+  --theme-primary: #22c55e;
+  --theme-primary-hover: #4ade80;
+  --theme-primary-text: #09090b;
+  --theme-accent: #09090b;
+  --theme-subtle-bg: rgba(34, 197, 94, 0.14);
+  --theme-subtle-border: rgba(34, 197, 94, 0.4);
+  --theme-glow: rgba(34, 197, 94, 0.25);
 }
 
 /* Boros (Red & White - R/W) */
 [data-theme="boros"] {
   --theme-primary: #ef4444;
   --theme-primary-hover: #f87171;
-  --theme-primary-text: #020617;
-  --theme-accent: #fef08a;
-  --theme-subtle-bg: rgba(239, 68, 68, 0.12);
+  --theme-primary-text: #ffffff;
+  --theme-accent: #ffffff;
+  --theme-subtle-bg: rgba(239, 68, 68, 0.14);
   --theme-subtle-border: rgba(239, 68, 68, 0.35);
   --theme-glow: rgba(239, 68, 68, 0.25);
 }
 
 /* Simic (Green & Blue - G/U) */
 [data-theme="simic"] {
-  --theme-primary: #14b8a6;
-  --theme-primary-hover: #2dd4bf;
+  --theme-primary: #10b981;
+  --theme-primary-hover: #34d399;
   --theme-primary-text: #020617;
-  --theme-accent: #38bdf8;
-  --theme-subtle-bg: rgba(20, 184, 166, 0.12);
-  --theme-subtle-border: rgba(20, 184, 166, 0.35);
-  --theme-glow: rgba(20, 184, 166, 0.25);
+  --theme-accent: #06b6d4;
+  --theme-subtle-bg: rgba(16, 185, 129, 0.12);
+  --theme-subtle-border: rgba(16, 185, 129, 0.35);
+  --theme-glow: rgba(16, 185, 129, 0.25);
 }
 
 /* Utility Theme Classes */

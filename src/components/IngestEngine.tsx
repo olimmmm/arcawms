@@ -14,7 +14,7 @@ import {
 import { ActivityLogItem, CardInstance, ScryfallCard } from '../types';
 import { db, generateUUID } from '../services/db';
 import { formatLocationId, parseDecklistText } from '../services/pickPath';
-import { fetchScryfallCardByName, getScryfallImageFallback } from '../services/scryfall';
+import { fetchScryfallCardByName, fetchScryfallCardsBatch, getScryfallImageFallback } from '../services/scryfall';
 import { playSound, triggerHaptic } from '../services/audio';
 
 const SAMPLE_SCAN = `4 Counterspell
@@ -91,6 +91,21 @@ export const IngestEngine: React.FC = () => {
         const key = inst.card_name.toLowerCase();
         if (!brewingPool.has(key)) brewingPool.set(key, []);
         brewingPool.get(key)!.push(inst);
+      }
+    }
+
+    // Pre-fetch missing cards in fast, rate-limit-free batches (75 cards per API call)
+    const cardNamesToFetch = parsed
+      .map(p => p.name)
+      .filter(name => {
+        const c = db.getCard(name);
+        return !c || !c.image_url_normal || !c.image_url_normal.startsWith('https://cards.scryfall.io') || !c.price_eur;
+      });
+
+    if (cardNamesToFetch.length > 0) {
+      const fetchedBatch = await fetchScryfallCardsBatch(cardNamesToFetch);
+      for (const card of fetchedBatch.values()) {
+        db.upsertCard(card);
       }
     }
 
