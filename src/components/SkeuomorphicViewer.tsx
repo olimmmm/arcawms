@@ -41,13 +41,16 @@ export const SkeuomorphicViewer: React.FC = () => {
 
   useEffect(() => {
     enrichMissingCards();
-  }, [selectedBatch]);
+  }, [selectedBatch, selectedDrawer, selectedUnit]);
 
   const cardDictionary = useMemo(() => {
     const map = new Map<string, ScryfallCard>();
     for (const c of cards) {
+      const existing = map.get(c.name.toLowerCase());
+      if (!existing || (c.price_eur > 0 && existing.price_eur === 0)) {
+        map.set(c.name.toLowerCase(), c);
+      }
       map.set(c.oracle_id, c);
-      map.set(c.name.toLowerCase(), c);
     }
     return map;
   }, [cards]);
@@ -308,7 +311,7 @@ export const SkeuomorphicViewer: React.FC = () => {
           <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-2xl">
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
               {activeCardsInBatch.map((inst) => {
-                const meta = cardDictionary.get(inst.oracle_id) || cardDictionary.get(inst.card_name.toLowerCase());
+                const meta = cardDictionary.get(inst.card_name.toLowerCase()) || cardDictionary.get(inst.oracle_id) || db.getCard(inst.card_name);
 
                 return (
                   <div
@@ -327,11 +330,9 @@ export const SkeuomorphicViewer: React.FC = () => {
                         }}
                       />
 
-                      {meta?.price_eur ? (
-                        <div className="absolute bottom-1 right-1 bg-slate-950/90 text-emerald-400 font-mono font-bold text-[10px] px-1.5 py-0.5 rounded border border-emerald-900/50">
-                          €{meta.price_eur.toFixed(2)}
-                        </div>
-                      ) : null}
+                      <div className="absolute bottom-1 right-1 bg-slate-950/90 text-emerald-400 font-mono font-bold text-[10px] px-1.5 py-0.5 rounded border border-emerald-900/50">
+                        €{meta?.price_eur ? meta.price_eur.toFixed(2) : '0.00'}
+                      </div>
                     </div>
 
                     {/* Card Info & Quick Pull Button */}

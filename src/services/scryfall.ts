@@ -84,8 +84,9 @@ export async function fetchScryfallCardsBatch(cardNames: string[]): Promise<Map<
     const clean = name.trim();
     if (!clean) continue;
     const lower = clean.toLowerCase();
-    if (scryfallMemoryCache.has(lower)) {
-      result.set(lower, scryfallMemoryCache.get(lower)!);
+    const cached = scryfallMemoryCache.get(lower);
+    if (cached && cached.price_eur > 0 && cached.image_url_normal.startsWith('https://cards.scryfall.io')) {
+      result.set(lower, cached);
     } else {
       toFetch.push(clean);
     }
@@ -100,45 +101,78 @@ export async function fetchScryfallCardsBatch(cardNames: string[]): Promise<Map<
     const chunk = uniqueNames.slice(i, i + CHUNK_SIZE);
     const identifiers = chunk.map(name => ({ name }));
 
+    let data: any = null;
+
+    // 1. Direct browser fetch without forbidden User-Agent header (standard CORS)
     try {
       const res = await fetch('https://api.scryfall.com/cards/collection', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'User-Agent': 'ArcaWMS/1.1 (MTG Chaos-Sorting WMS)',
           'Accept': 'application/json'
         },
         body: JSON.stringify({ identifiers })
       });
-
       if (res.ok) {
-        const json = await res.json();
-        const returnedCards = json.data || [];
-        for (const raw of returnedCards) {
-          const norm = normalizeScryfallCard(raw);
-          const lower = norm.name.toLowerCase();
-          scryfallMemoryCache.set(lower, norm);
-          scryfallMemoryCache.set(norm.oracle_id, norm);
-          result.set(lower, norm);
+        data = await res.json();
+      }
+    } catch {
+      data = null;
+    }
+
+    // 2. If direct call failed (CORS block, network, ad-blocker), fallback to server proxy
+    if (!data) {
+      try {
+        const proxyRes = await fetch('/api/scryfall/collection', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+          },
+          body: JSON.stringify({ identifiers })
+        });
+        if (proxyRes.ok) {
+          data = await proxyRes.json();
+        }
+      } catch (proxyErr) {
+        console.warn('Backend proxy fetch also failed:', proxyErr);
+      }
+    }
+
+    if (data && data.data) {
+      const returnedCards = data.data || [];
+      for (const raw of returnedCards) {
+        const norm = normalizeScryfallCard(raw);
+        const lower = norm.name.toLowerCase();
+        scryfallMemoryCache.set(lower, norm);
+        scryfallMemoryCache.set(norm.oracle_id, norm);
+        result.set(lower, norm);
+
+        // Also index front face if double-faced e.g. "Delver of Secrets // Insectile Aberration"
+        if (norm.name.includes(' // ')) {
+          const front = norm.name.split(' // ')[0].toLowerCase();
+          scryfallMemoryCache.set(front, norm);
+          result.set(front, norm);
         }
 
-        // Handle cards not found in exact collection batch (try fuzzy lookup)
-        if (json.not_found && Array.isArray(json.not_found)) {
-          for (const nf of json.not_found) {
-            if (nf.name) {
-              await sleep(80); // rate limit pause
-              const single = await fetchScryfallCardByName(nf.name);
-              if (single) {
-                result.set(single.name.toLowerCase(), single);
-              }
+        db.upsertCard(norm);
+      }
+
+      // Handle cards not found in exact collection batch (try fuzzy lookup)
+      if (data.not_found && Array.isArray(data.not_found)) {
+        for (const nf of data.not_found) {
+          if (nf.name) {
+            await sleep(80); // rate limit pause
+            const single = await fetchScryfallCardByName(nf.name);
+            if (single) {
+              result.set(single.name.toLowerCase(), single);
+              db.upsertCard(single);
             }
           }
         }
-      } else {
-        console.warn(`Scryfall collection request failed with status: ${res.status}`);
       }
-    } catch (err) {
-      console.warn('Error in Scryfall collection batch fetch:', err);
+    } else {
+      console.warn('Scryfall batch fetch returned no data for chunk');
     }
 
     if (i + CHUNK_SIZE < uniqueNames.length) {
@@ -154,15 +188,15 @@ export async function fetchScryfallCardsBatch(cardNames: string[]): Promise<Map<
  */
 export async function fetchScryfallCardByName(cardName: string): Promise<ScryfallCard | null> {
   const cleanName = cardName.trim().toLowerCase();
-  if (scryfallMemoryCache.has(cleanName)) {
-    return scryfallMemoryCache.get(cleanName)!;
+  const cached = scryfallMemoryCache.get(cleanName);
+  if (cached && cached.price_eur > 0 && cached.image_url_normal.startsWith('https://cards.scryfall.io')) {
+    return cached;
   }
 
   try {
     const encoded = encodeURIComponent(cardName.trim());
-    const res = await fetch(`https://api.scryfall.com/cards/named?exact=${encoded}`, {
+    let res = await fetch(`https://api.scryfall.com/cards/named?exact=${encoded}`, {
       headers: {
-        'User-Agent': 'ArcaWMS/1.1',
         'Accept': 'application/json'
       }
     });
@@ -170,24 +204,21 @@ export async function fetchScryfallCardByName(cardName: string): Promise<Scryfal
     if (!res.ok) {
       // Try fuzzy if exact not found
       await sleep(80);
-      const fuzzyRes = await fetch(`https://api.scryfall.com/cards/named?fuzzy=${encoded}`, {
+      res = await fetch(`https://api.scryfall.com/cards/named?fuzzy=${encoded}`, {
         headers: {
-          'User-Agent': 'ArcaWMS/1.1',
           'Accept': 'application/json'
         }
       });
-      if (!fuzzyRes.ok) return null;
-      const data = await fuzzyRes.json();
-      const normalized = normalizeScryfallCard(data);
-      scryfallMemoryCache.set(cleanName, normalized);
-      scryfallMemoryCache.set(normalized.name.toLowerCase(), normalized);
-      return normalized;
     }
+
+    if (!res.ok) return null;
 
     const data = await res.json();
     const normalized = normalizeScryfallCard(data);
     scryfallMemoryCache.set(cleanName, normalized);
     scryfallMemoryCache.set(normalized.name.toLowerCase(), normalized);
+    scryfallMemoryCache.set(normalized.oracle_id, normalized);
+    db.upsertCard(normalized);
     return normalized;
   } catch (err) {
     console.warn(`Failed to fetch card "${cardName}" from Scryfall:`, err);
@@ -212,19 +243,22 @@ export async function enrichMissingCards(): Promise<number> {
 
     const cardMap = new Map<string, ScryfallCard>();
     allCards.forEach(c => {
+      const existing = cardMap.get(c.name.toLowerCase());
+      if (!existing || (c.price_eur > 0 && existing.price_eur === 0)) {
+        cardMap.set(c.name.toLowerCase(), c);
+      }
       cardMap.set(c.oracle_id, c);
-      cardMap.set(c.name.toLowerCase(), c);
     });
 
     const namesToEnrich = new Set<string>();
 
     for (const inst of allInstances) {
-      const meta = cardMap.get(inst.oracle_id) || cardMap.get(inst.card_name.toLowerCase());
+      const meta = cardMap.get(inst.card_name.toLowerCase()) || cardMap.get(inst.oracle_id);
       const needsImage = !meta || !meta.image_url_normal || !meta.image_url_normal.startsWith('https://cards.scryfall.io');
       const needsPrice = !meta || !meta.price_eur || meta.price_eur === 0;
 
       if (needsImage || needsPrice) {
-        namesToEnrich.add(inst.card_name);
+        namesToEnrich.add(inst.card_name.trim());
       }
     }
 
@@ -233,11 +267,14 @@ export async function enrichMissingCards(): Promise<number> {
       const needsPrice = !c.price_eur || c.price_eur === 0;
 
       if (needsImage || needsPrice) {
-        namesToEnrich.add(c.name);
+        namesToEnrich.add(c.name.trim());
       }
     }
 
-    if (namesToEnrich.size === 0) return 0;
+    if (namesToEnrich.size === 0) {
+      db.healAndDeduplicateCards();
+      return 0;
+    }
 
     const namesList = Array.from(namesToEnrich);
     const fetchedMap = await fetchScryfallCardsBatch(namesList);
@@ -248,6 +285,7 @@ export async function enrichMissingCards(): Promise<number> {
       updatedCount++;
     }
 
+    db.healAndDeduplicateCards();
     return updatedCount;
   } catch (e) {
     console.warn('Error during auto-enrichment:', e);
@@ -264,7 +302,7 @@ export async function scryfallAutocomplete(prefix: string): Promise<string[]> {
   if (!prefix || prefix.length < 2) return [];
   try {
     const res = await fetch(`https://api.scryfall.com/cards/autocomplete?q=${encodeURIComponent(prefix)}`, {
-      headers: { 'User-Agent': 'ArcaWMS/1.1' }
+      headers: { 'Accept': 'application/json' }
     });
     if (!res.ok) return [];
     const data = await res.json();
@@ -281,7 +319,7 @@ export async function searchScryfallAPI(query: string): Promise<ScryfallCard[]> 
   if (!query.trim()) return [];
   try {
     const res = await fetch(`https://api.scryfall.com/cards/search?q=${encodeURIComponent(query)}&order=name`, {
-      headers: { 'User-Agent': 'ArcaWMS/1.1' }
+      headers: { 'Accept': 'application/json' }
     });
     if (!res.ok) return [];
     const data = await res.json();

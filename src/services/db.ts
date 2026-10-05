@@ -351,6 +351,7 @@ class ArcaDatabase {
       this.history = [...INITIAL_HISTORY];
     }
 
+    this.healAndDeduplicateCards();
     this.initialized = true;
   }
 
@@ -403,23 +404,140 @@ class ArcaDatabase {
   }
 
   public getCard(oracleIdOrName: string): ScryfallCard | undefined {
-    if (this.cards.has(oracleIdOrName)) {
-      return this.cards.get(oracleIdOrName);
-    }
+    if (!oracleIdOrName) return undefined;
     const clean = oracleIdOrName.trim().toLowerCase();
+
+    // 1. Direct oracle_id match if it already has a valid market price
+    if (this.cards.has(oracleIdOrName)) {
+      const byId = this.cards.get(oracleIdOrName);
+      if (byId && byId.price_eur > 0) return byId;
+    }
+
+    // 2. Name-based search: find canonical card with real market price
+    let bestByName: ScryfallCard | undefined;
     for (const card of this.cards.values()) {
-      if (card.name.toLowerCase() === clean) {
-        return card;
+      if (card.name.trim().toLowerCase() === clean) {
+        if (card.price_eur > 0) return card;
+        if (!bestByName) bestByName = card;
       }
     }
-    return undefined;
+
+    // 3. Search across all cards if oracle_id matches with price
+    for (const card of this.cards.values()) {
+      if (card.oracle_id === oracleIdOrName) {
+        if (card.price_eur > 0) return card;
+        if (!bestByName) bestByName = card;
+      }
+    }
+
+    if (bestByName) return bestByName;
+    return this.cards.get(oracleIdOrName);
   }
 
   public upsertCard(card: ScryfallCard) {
+    const cleanName = card.name.trim().toLowerCase();
+
+    // Preserve existing price if incoming card has price 0 but existing had valid price
+    const existing = this.getCard(cleanName);
+    if (existing && existing.price_eur > 0 && (!card.price_eur || card.price_eur === 0)) {
+      card.price_eur = existing.price_eur;
+      if (!card.image_url_normal || !card.image_url_normal.startsWith('https://cards.scryfall.io')) {
+        card.image_url_normal = existing.image_url_normal;
+      }
+    }
+
+    // 1. Remove any dummy/stale duplicate card entries with the same name
+    for (const [id, c] of this.cards.entries()) {
+      if (c.name.trim().toLowerCase() === cleanName && id !== card.oracle_id) {
+        this.cards.delete(id);
+      }
+    }
+
+    // 2. Store canonical card
     this.cards.set(card.oracle_id, card);
     this.saveCards();
+
+    // 3. Heal any instances whose card_name matches so they point to the canonical oracle_id
+    let instancesHealed = false;
+    for (const [instId, inst] of this.instances.entries()) {
+      if (inst.card_name.trim().toLowerCase() === cleanName) {
+        if (inst.oracle_id !== card.oracle_id || inst.card_name !== card.name) {
+          this.instances.set(instId, {
+            ...inst,
+            card_name: card.name,
+            oracle_id: card.oracle_id,
+            updated_at: new Date().toISOString()
+          });
+          instancesHealed = true;
+        }
+      }
+    }
+
+    if (instancesHealed) {
+      this.saveInstances();
+    }
+
     this.touchUpdated();
     this.notify();
+  }
+
+  /**
+   * Scans collection to reconcile dummy UUIDs with real Scryfall cards
+   * and link all physical card instances to canonical market prices.
+   */
+  public healAndDeduplicateCards(): void {
+    const cardsByName = new Map<string, ScryfallCard[]>();
+    for (const card of this.cards.values()) {
+      const key = card.name.trim().toLowerCase();
+      if (!cardsByName.has(key)) cardsByName.set(key, []);
+      cardsByName.get(key)!.push(card);
+    }
+
+    let modified = false;
+
+    for (const [name, cardList] of cardsByName.entries()) {
+      // Sort: best card first (has price > 0, has CDN image)
+      cardList.sort((a, b) => {
+        const aPrice = a.price_eur || 0;
+        const bPrice = b.price_eur || 0;
+        if (aPrice > 0 && bPrice === 0) return -1;
+        if (bPrice > 0 && aPrice === 0) return 1;
+        const aCdn = a.image_url_normal?.startsWith('https://cards.scryfall.io') ? 1 : 0;
+        const bCdn = b.image_url_normal?.startsWith('https://cards.scryfall.io') ? 1 : 0;
+        if (aCdn !== bCdn) return bCdn - aCdn;
+        return bPrice - aPrice;
+      });
+
+      const canonical = cardList[0];
+
+      // Remove stale/dummy duplicate cards
+      if (cardList.length > 1) {
+        for (let i = 1; i < cardList.length; i++) {
+          this.cards.delete(cardList[i].oracle_id);
+          modified = true;
+        }
+      }
+
+      // Link all instances of this card name to the canonical oracle_id
+      for (const [instId, inst] of this.instances.entries()) {
+        if (inst.card_name.trim().toLowerCase() === name) {
+          if (inst.oracle_id !== canonical.oracle_id) {
+            this.instances.set(instId, {
+              ...inst,
+              oracle_id: canonical.oracle_id
+            });
+            modified = true;
+          }
+        }
+      }
+    }
+
+    if (modified) {
+      this.saveCards();
+      this.saveInstances();
+      this.touchUpdated();
+      this.notify();
+    }
   }
 
   public getAllInstances(): CardInstance[] {
@@ -614,7 +732,7 @@ class ArcaDatabase {
       if (inst.state === 'A') inChaos++;
       else inDecks++;
 
-      const meta = this.getCard(inst.oracle_id) || this.getCard(inst.card_name);
+      const meta = this.getCard(inst.card_name) || this.getCard(inst.oracle_id);
       if (meta && meta.price_eur) {
         totalEur += meta.price_eur;
       }
@@ -636,7 +754,7 @@ class ArcaDatabase {
     ];
 
     for (const inst of instances) {
-      const meta = this.getCard(inst.oracle_id) || this.getCard(inst.card_name);
+      const meta = this.getCard(inst.card_name) || this.getCard(inst.oracle_id);
       rows.push([
         `"${inst.card_name.replace(/"/g, '""')}"`,
         inst.state === 'A' ? 'Chaos Drawers' : 'Decks / Brewing',
@@ -768,6 +886,7 @@ class ArcaDatabase {
       this.saveInstances();
       this.touchUpdated(remoteTimestamp || data.timestamp || Date.now());
       this.saveSnapshot('Auto snapshot before import');
+      this.healAndDeduplicateCards();
       this.notify();
       return { success: true, count: data.instances.length };
     } catch (err: any) {

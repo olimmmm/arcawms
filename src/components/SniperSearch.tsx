@@ -110,7 +110,18 @@ export const SniperSearch: React.FC = () => {
 
     const clauses = parseSyntaxQuery(query);
 
-    return cards.filter(card => {
+    // Deduplicate cards by name, prioritizing canonical card with market price
+    const dedupedMap = new Map<string, ScryfallCard>();
+    for (const card of cards) {
+      const key = card.name.trim().toLowerCase();
+      const existing = dedupedMap.get(key);
+      if (!existing || (card.price_eur > 0 && existing.price_eur === 0)) {
+        dedupedMap.set(key, card);
+      }
+    }
+    const dedupedCards = Array.from(dedupedMap.values());
+
+    return dedupedCards.filter(card => {
       const hasInstances = (instancesByOracleId.get(card.oracle_id) || instancesByOracleId.get(card.name.toLowerCase()) || []).length > 0;
       const hasRemoved = Array.from(recentlyRemoved.values()).some(
         r => r.oracle_id === card.oracle_id || r.card_name.toLowerCase() === card.name.toLowerCase()
@@ -373,7 +384,7 @@ export const SniperSearch: React.FC = () => {
                       )}
                     </h2>
                     <div className="text-xs text-slate-400 mt-0.5">
-                      {card.type_line} • CMC {card.cmc} • <span className="text-emerald-400 font-mono font-medium">€{card.price_eur.toFixed(2)}</span>
+                      {card.type_line} • CMC {card.cmc} • <span className="text-emerald-400 font-mono font-medium">€{card.price_eur ? card.price_eur.toFixed(2) : '0.00'}</span>
                     </div>
                   </div>
 

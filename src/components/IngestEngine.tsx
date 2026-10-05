@@ -177,6 +177,7 @@ export const IngestEngine: React.FC = () => {
       totalProcessed += item.count;
     }
 
+    db.healAndDeduplicateCards();
     setIsProcessing(false);
     playSound('success');
     triggerHaptic('heavy');

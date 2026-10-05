@@ -80,6 +80,30 @@ app.post('/api/sync/store', (req, res) => {
   }
 });
 
+// Proxy for Scryfall /cards/collection (bypasses browser CORS and ad-blockers)
+app.post('/api/scryfall/collection', async (req, res) => {
+  try {
+    const { identifiers } = req.body;
+    if (!identifiers || !Array.isArray(identifiers)) {
+      return res.status(400).json({ error: 'Missing identifiers array' });
+    }
+    const response = await fetch('https://api.scryfall.com/cards/collection', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': 'ArcaWMS/1.1 (MTG Chaos-Sorting WMS)',
+        'Accept': 'application/json'
+      },
+      body: JSON.stringify({ identifiers })
+    });
+    const data = await response.json();
+    res.json(data);
+  } catch (err: any) {
+    console.warn('Scryfall server proxy error:', err);
+    res.status(500).json({ error: err.message || 'Scryfall proxy error' });
+  }
+});
+
 // Serve frontend in production if built
 if (fs.existsSync(DIST_DIR)) {
   app.use(express.static(DIST_DIR));
