@@ -83,7 +83,8 @@ app.post('/api/sync/store', (req, res) => {
 // Serve frontend in production if built
 if (fs.existsSync(DIST_DIR)) {
   app.use(express.static(DIST_DIR));
-  app.get('*', (req, res, next) => {
+  app.use((req, res, next) => {
+    if (req.method !== 'GET') return next();
     if (req.path.startsWith('/api') || req.path.startsWith('/ws')) {
       return next();
     }
