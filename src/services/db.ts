@@ -1080,36 +1080,130 @@ class ArcaDatabase {
 
   public importJSON(jsonStr: string, remoteTimestamp?: number): { success: boolean; count: number; error?: string } {
     try {
-      const data = JSON.parse(jsonStr);
-      if (!data.instances || !Array.isArray(data.instances)) {
-        return { success: false, count: 0, error: 'Missing instances array' };
-      }
-      if (data.cards && Array.isArray(data.cards)) {
-        data.cards.forEach((c: ScryfallCard) => this.cards.set(c.oracle_id, c));
-        this.saveCards();
-      }
-      if (data.history && Array.isArray(data.history)) {
-        this.history = data.history;
-        this.saveHistory();
-      }
-      if (data.settings) {
-        this.updateSettings(data.settings);
+      if (!jsonStr || typeof jsonStr !== 'string') {
+        return { success: false, count: 0, error: 'Empty or invalid backup data' };
       }
 
-      // Capture pre-import snapshot BEFORE clearing instances for failsafe rollback
+      let data: any;
+      try {
+        data = JSON.parse(jsonStr);
+      } catch (parseErr: any) {
+        return { success: false, count: 0, error: `Invalid JSON format: ${parseErr.message}` };
+      }
+
+      if (!data || typeof data !== 'object') {
+        return { success: false, count: 0, error: 'Backup data must be a JSON object or array' };
+      }
+
+      // Backwards compatibility: If imported data is a top-level array, treat as instances
+      let rawInstances: any[] = [];
+      if (Array.isArray(data)) {
+        rawInstances = data;
+        data = { instances: rawInstances, cards: [], history: [], settings: {} };
+      } else if (Array.isArray(data.instances)) {
+        rawInstances = data.instances;
+      } else if (Array.isArray(data.collection)) {
+        rawInstances = data.collection;
+      } else if (Array.isArray(data.cards_instances)) {
+        rawInstances = data.cards_instances;
+      } else {
+        return { success: false, count: 0, error: 'No card instances found in backup file' };
+      }
+
+      // 1. Sanitize & normalize card instances (guarantees no undefined fields)
+      let highestUnitFound = 9;
+      const cleanInstances: CardInstance[] = [];
+
+      for (const raw of rawInstances) {
+        if (!raw || typeof raw !== 'object') continue;
+        const cardName = String(raw.card_name || raw.name || 'Unknown Card').trim();
+        if (!cardName) continue;
+
+        const state: 'A' | 'B' = raw.state === 'B' ? 'B' : 'A';
+        let locationId: string | null = null;
+
+        if (state === 'A') {
+          if (raw.location_id) {
+            locationId = String(raw.location_id).trim();
+            const parsed = parseLocationId(locationId);
+            if (parsed.valid && parsed.unit > highestUnitFound && parsed.unit < 999) {
+              highestUnitFound = parsed.unit;
+            }
+          } else {
+            locationId = '1.A.01';
+          }
+        }
+
+        cleanInstances.push({
+          instance_id: String(raw.instance_id || generateUUID()),
+          oracle_id: String(raw.oracle_id || ''),
+          card_name: cardName,
+          state,
+          location_id: locationId,
+          created_at: raw.created_at || new Date().toISOString(),
+          updated_at: raw.updated_at || new Date().toISOString()
+        });
+      }
+
+      // 2. Cards dictionary (safely initialized to empty map/array if missing in older backups)
+      if (data.cards && Array.isArray(data.cards)) {
+        data.cards.forEach((c: any) => {
+          if (c && typeof c === 'object' && (c.oracle_id || c.name)) {
+            const oracleId = c.oracle_id || generateUUID();
+            this.cards.set(oracleId, {
+              oracle_id: oracleId,
+              name: String(c.name || '').trim(),
+              mana_cost: c.mana_cost,
+              cmc: typeof c.cmc === 'number' ? c.cmc : 0,
+              type_line: c.type_line || 'Magic Card',
+              colors: Array.isArray(c.colors) ? c.colors : [],
+              color_identity: Array.isArray(c.color_identity) ? c.color_identity : [],
+              rarity: c.rarity || 'common',
+              image_url_normal: c.image_url_normal || '',
+              price_eur: typeof c.price_eur === 'number' ? c.price_eur : 0,
+              oracle_text: c.oracle_text
+            });
+          }
+        });
+        this.saveCards();
+      }
+
+      // 3. Activity History (safely initialized to empty array if missing)
+      if (data.history && Array.isArray(data.history)) {
+        this.history = data.history.filter((h: any) => h && typeof h === 'object');
+        this.saveHistory();
+      }
+
+      // 4. Settings & Dynamic Units (gracefully accept older backups with original 9 units)
+      const currentSettings = this.getSettings();
+      const importedSettings = (data.settings && typeof data.settings === 'object') ? data.settings : {};
+      const targetUnitCount = typeof importedSettings.unitCount === 'number' && importedSettings.unitCount > 0
+        ? Math.max(importedSettings.unitCount, highestUnitFound)
+        : Math.max(currentSettings.unitCount || 9, highestUnitFound, 9);
+
+      this.updateSettings({
+        theme: importedSettings.theme || currentSettings.theme || 'orzhov',
+        unitCount: targetUnitCount
+      });
+
+      // 5. Pre-import snapshot for instant rollback protection
       if (this.instances.size > 0) {
         this.saveSnapshot(`Backup before import (${this.instances.size} cards)`);
       }
 
+      // 6. Overwrite active instances with normalized collection
       this.instances.clear();
-      data.instances.forEach((inst: CardInstance) => this.instances.set(inst.instance_id, inst));
+      cleanInstances.forEach((inst: CardInstance) => this.instances.set(inst.instance_id, inst));
       this.saveInstances();
-      this.touchUpdated(remoteTimestamp || data.timestamp || Date.now());
+
+      this.touchUpdated(remoteTimestamp || data.timestamp || data.last_updated || Date.now());
       this.healAndDeduplicateCards();
       this.notify();
-      return { success: true, count: data.instances.length };
+
+      return { success: true, count: cleanInstances.length };
     } catch (err: any) {
-      return { success: false, count: 0, error: err.message };
+      console.error('[ArcaDB] Import error:', err);
+      return { success: false, count: 0, error: err.message || 'Unknown import error' };
     }
   }
 

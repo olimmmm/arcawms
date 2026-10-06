@@ -16,7 +16,8 @@ import {
   Sparkles,
   Boxes,
   Plus,
-  Minus
+  Minus,
+  CheckCircle2
 } from 'lucide-react';
 import { db } from '../services/db';
 import { syncClient } from '../services/sync';
@@ -40,6 +41,7 @@ export const SettingsSyncModal: React.FC<SettingsSyncModalProps> = ({
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [snapshots, setSnapshots] = useState<Array<{ id: string; timestamp: string; label: string; cardCount: number }>>([]);
   const [unitCount, setUnitCount] = useState<number>(() => db.getUnitCount());
+  const [exportFeedback, setExportFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleRefreshMetadata = async () => {
@@ -94,27 +96,57 @@ export const SettingsSyncModal: React.FC<SettingsSyncModalProps> = ({
   };
 
   const handleExportJSON = () => {
-    playSound('click');
-    const jsonStr = db.exportJSON();
-    const blob = new Blob([jsonStr], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `arcawms-backup-${new Date().toISOString().split('T')[0]}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+    try {
+      playSound('click');
+      const jsonStr = db.exportJSON();
+      const fileName = `arcawms-backup-${new Date().toISOString().split('T')[0]}.json`;
+      const blob = new Blob([jsonStr], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      a.click();
+      URL.revokeObjectURL(url);
+      playSound('success');
+      setExportFeedback({
+        type: 'success',
+        message: `Successfully generated and downloaded ${fileName}`
+      });
+      setTimeout(() => setExportFeedback(null), 6000);
+    } catch (err: any) {
+      playSound('error');
+      setExportFeedback({
+        type: 'error',
+        message: `Failed to export JSON: ${err.message}`
+      });
+    }
   };
 
   const handleExportCSV = () => {
-    playSound('click');
-    const csvStr = db.exportCSV();
-    const blob = new Blob([csvStr], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `arcawms-collection-${new Date().toISOString().split('T')[0]}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+    try {
+      playSound('click');
+      const csvStr = db.exportCSV();
+      const fileName = `arcawms-collection-${new Date().toISOString().split('T')[0]}.csv`;
+      const blob = new Blob([csvStr], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      a.click();
+      URL.revokeObjectURL(url);
+      playSound('success');
+      setExportFeedback({
+        type: 'success',
+        message: `Successfully generated and downloaded ${fileName}`
+      });
+      setTimeout(() => setExportFeedback(null), 6000);
+    } catch (err: any) {
+      playSound('error');
+      setExportFeedback({
+        type: 'error',
+        message: `Failed to export CSV: ${err.message}`
+      });
+    }
   };
 
   const handleImportFile = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -327,6 +359,26 @@ export const SettingsSyncModal: React.FC<SettingsSyncModalProps> = ({
               <span className="text-[10px] text-slate-500">Restore from JSON</span>
             </button>
           </div>
+
+          {/* Export / Download Feedback Confirmation Banner */}
+          {exportFeedback && (
+            <div className={`p-3 rounded-xl border text-xs font-mono flex items-center justify-between gap-2 shadow-lg transition-all animate-in fade-in slide-in-from-top-1 ${
+              exportFeedback.type === 'success'
+                ? 'bg-emerald-950/80 border-emerald-500/80 text-emerald-300'
+                : 'bg-rose-950/80 border-rose-500/80 text-rose-300'
+            }`}>
+              <div className="flex items-center gap-2 min-w-0">
+                <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />
+                <span className="font-bold truncate">{exportFeedback.message}</span>
+              </div>
+              <button
+                onClick={() => setExportFeedback(null)}
+                className="p-1 text-slate-400 hover:text-white rounded cursor-pointer shrink-0"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
 
           {/* Refresh Images & Prices on Demand */}
           <button
