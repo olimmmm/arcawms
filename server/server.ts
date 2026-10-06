@@ -35,19 +35,33 @@ function loadStore() {
   } catch (err) {
     console.warn('Could not load store file:', err);
   }
-}
-
-function saveStoreDebounced(data: any) {
+function saveStore(data: any) {
   currentStore = data;
   if (saveDebounceTimer) clearTimeout(saveDebounceTimer);
   saveDebounceTimer = setTimeout(() => {
     try {
       fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2), 'utf-8');
     } catch (err) {
-      console.error('Failed to write store file:', err);
+      console.error('[SyncServer] Failed to write store file:', err);
     }
-  }, 5000); // 5-second debounce so disk isn't constantly hit
+  }, 250);
 }
+
+function flushStoreSync() {
+  if (currentStore) {
+    try {
+      if (saveDebounceTimer) clearTimeout(saveDebounceTimer);
+      fs.writeFileSync(DATA_FILE, JSON.stringify(currentStore, null, 2), 'utf-8');
+      console.log('[SyncServer] Flushed store to disk before shutdown.');
+    } catch (err) {
+      console.error('[SyncServer] Flush failed:', err);
+    }
+  }
+}
+
+process.on('SIGINT', () => { flushStoreSync(); process.exit(0); });
+process.on('SIGTERM', () => { flushStoreSync(); process.exit(0); });
+process.on('beforeExit', () => { flushStoreSync(); });
 
 loadStore();
 
@@ -68,13 +82,13 @@ app.get('/api/sync/store', (req, res) => {
 app.post('/api/sync/store', (req, res) => {
   const { store } = req.body;
   if (store) {
-    saveStoreDebounced(store);
+    saveStore(store);
     broadcast({
       type: 'SYNC_FULL_STATE',
       payload: store,
-      timestamp: Date.now()
+      timestamp: store.timestamp || Date.now()
     });
-    res.json({ success: true });
+    res.json({ success: true, timestamp: store.timestamp || Date.now() });
   } else {
     res.status(400).json({ error: 'Missing store data' });
   }
@@ -133,15 +147,15 @@ wss.on('connection', (ws) => {
     ws.send(JSON.stringify({
       type: 'SYNC_FULL_STATE',
       payload: currentStore,
-      timestamp: Date.now()
+      timestamp: currentStore.timestamp || Date.now()
     }));
   }
 
   ws.on('message', (message) => {
     try {
       const parsed = JSON.parse(message.toString());
-      if (parsed.type === 'STATE_UPDATE') {
-        saveStoreDebounced(parsed.payload);
+      if (parsed.type === 'STATE_UPDATE' && parsed.payload) {
+        saveStore(parsed.payload);
         broadcast(parsed, ws);
       } else if (parsed.type === 'PING') {
         ws.send(JSON.stringify({ type: 'PONG', timestamp: Date.now() }));

@@ -962,7 +962,7 @@ class ArcaDatabase {
         instances: Array.from(this.instances.values()),
         cards: Array.from(this.cards.values())
       };
-      const updated = [newSnap, ...existing].slice(0, 5);
+      const updated = [newSnap, ...existing].slice(0, 10);
       localStorage.setItem('arcawms_snapshots_v1', JSON.stringify(updated));
     } catch (e) {
       console.warn('Failed to save snapshot:', e);
@@ -1045,11 +1045,16 @@ class ArcaDatabase {
       if (data.settings) {
         this.updateSettings(data.settings);
       }
+
+      // Capture pre-import snapshot BEFORE clearing instances for failsafe rollback
+      if (this.instances.size > 0) {
+        this.saveSnapshot(`Backup before import (${this.instances.size} cards)`);
+      }
+
       this.instances.clear();
       data.instances.forEach((inst: CardInstance) => this.instances.set(inst.instance_id, inst));
       this.saveInstances();
       this.touchUpdated(remoteTimestamp || data.timestamp || Date.now());
-      this.saveSnapshot('Auto snapshot before import');
       this.healAndDeduplicateCards();
       this.notify();
       return { success: true, count: data.instances.length };
