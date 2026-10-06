@@ -35,6 +35,8 @@ function loadStore() {
   } catch (err) {
     console.warn('Could not load store file:', err);
   }
+}
+
 function saveStore(data: any) {
   currentStore = data;
   if (saveDebounceTimer) clearTimeout(saveDebounceTimer);
