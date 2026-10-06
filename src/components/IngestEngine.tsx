@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import { ActivityLogItem, CardInstance, ScryfallCard } from '../types';
 import { db, generateUUID } from '../services/db';
-import { formatLocationId, parseDecklistText } from '../services/pickPath';
+import { formatLocationId, parseDecklistText, getSmartDefaultBatchLocation } from '../services/pickPath';
 import { fetchScryfallCardByName, fetchScryfallCardsBatch, getScryfallImageFallback } from '../services/scryfall';
 import { playSound, triggerHaptic } from '../services/audio';
 
@@ -30,11 +30,16 @@ export const IngestEngine: React.FC = () => {
   // 3-way Ingest Mode
   const [mode, setMode] = useState<IngestMode>('new_to_chaos');
 
-  const [unit, setUnit] = useState(4);
-  const [drawer, setDrawer] = useState<'A' | 'B' | 'C'>('C');
-  const [batchIndex, setBatchIndex] = useState(2); // e.g. 4.C.02
+  // Smart initial batch location: first Unit & Drawer with strictly fewer than 12 batches
+  const initialLoc = useMemo(() => {
+    return getSmartDefaultBatchLocation(db.getAllInstances(), db.getUnitCount());
+  }, []);
 
-  const [rawText, setRawText] = useState(SAMPLE_SCAN);
+  const [unit, setUnit] = useState<number>(initialLoc.unit);
+  const [drawer, setDrawer] = useState<'A' | 'B' | 'C'>(initialLoc.drawer);
+  const [batchIndex, setBatchIndex] = useState<number | ''>(initialLoc.batchIndex);
+
+  const [rawText, setRawText] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
@@ -54,7 +59,17 @@ export const IngestEngine: React.FC = () => {
     });
   }, []);
 
-  const currentCoordinate = formatLocationId(unit, drawer, batchIndex);
+  const effectiveBatchIndex = typeof batchIndex === 'number' && batchIndex >= 1 ? batchIndex : 1;
+  const currentCoordinate = formatLocationId(unit, drawer, effectiveBatchIndex);
+
+  // Auto-allocate smart default location (< 12 non-empty batches)
+  const handleAutoAllocateNext = () => {
+    playSound('click');
+    const smart = getSmartDefaultBatchLocation(db.getAllInstances(), db.getUnitCount());
+    setUnit(smart.unit);
+    setDrawer(smart.drawer);
+    setBatchIndex(smart.batchIndex);
+  };
 
   // Cards currently in target batch
   const existingInBatch = useMemo(() => {
@@ -195,9 +210,16 @@ export const IngestEngine: React.FC = () => {
     playSound('success');
     triggerHaptic('heavy');
 
+    if (batchIndex === '') {
+      setBatchIndex(effectiveBatchIndex);
+    }
+
     if (mode === 'new_to_chaos') {
       setSuccessMessage(`Ingested ${newlyCreated} new cards into Batch ${currentCoordinate}!`);
-      setBatchIndex(prev => prev + 1); // Advance batch coordinate
+      const nextSmart = getSmartDefaultBatchLocation(db.getAllInstances(), db.getUnitCount());
+      setUnit(nextSmart.unit);
+      setDrawer(nextSmart.drawer);
+      setBatchIndex(nextSmart.batchIndex);
     } else if (mode === 'new_to_brewing') {
       setSuccessMessage(`Added ${newlyCreated} new cards directly to Brewing & Decks pool!`);
     } else {
@@ -206,7 +228,10 @@ export const IngestEngine: React.FC = () => {
           newlyCreated > 0 ? ` (and indexed ${newlyCreated} additional copies)` : ''
         }!`
       );
-      setBatchIndex(prev => prev + 1); // Advance batch coordinate
+      const nextSmart = getSmartDefaultBatchLocation(db.getAllInstances(), db.getUnitCount());
+      setUnit(nextSmart.unit);
+      setDrawer(nextSmart.drawer);
+      setBatchIndex(nextSmart.batchIndex);
     }
 
     setTimeout(() => setSuccessMessage(null), 5000);
@@ -316,16 +341,32 @@ export const IngestEngine: React.FC = () => {
 
             <div className="flex items-center gap-2">
               <button
-                onClick={() => { setBatchIndex(prev => Math.max(1, prev - 1)); playSound('click'); }}
-                className="px-3 py-1.5 rounded-lg bg-slate-800 text-xs font-mono text-slate-300 hover:bg-slate-700"
+                onClick={() => { 
+                  const cur = typeof batchIndex === 'number' && batchIndex >= 1 ? batchIndex : 1;
+                  setBatchIndex(Math.max(1, cur - 1)); 
+                  playSound('click'); 
+                }}
+                className="px-3 py-1.5 rounded-lg bg-slate-800 text-xs font-mono text-slate-300 hover:bg-slate-700 cursor-pointer"
               >
                 Batch -1
               </button>
               <button
-                onClick={() => { setBatchIndex(prev => prev + 1); playSound('click'); }}
-                className="px-3.5 py-1.5 rounded-lg bg-theme-primary hover-bg-theme-primary font-bold font-mono text-xs shadow"
+                onClick={() => { 
+                  const cur = typeof batchIndex === 'number' && batchIndex >= 1 ? batchIndex : 1;
+                  setBatchIndex(cur + 1); 
+                  playSound('click'); 
+                }}
+                className="px-3.5 py-1.5 rounded-lg bg-theme-primary hover-bg-theme-primary font-bold font-mono text-xs shadow cursor-pointer"
               >
                 Next Batch (+1) ➔
+              </button>
+              <button
+                onClick={handleAutoAllocateNext}
+                className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-mono text-amber-300 hover:text-amber-200 border border-slate-700 flex items-center gap-1.5 shadow transition cursor-pointer"
+                title="Automatically select the first available Unit and Drawer with strictly fewer than 12 non-empty batches"
+              >
+                <Sparkles className="h-3.5 w-3.5 text-amber-400" />
+                <span className="hidden sm:inline">Smart Auto</span>
               </button>
             </div>
           </div>
@@ -362,7 +403,22 @@ export const IngestEngine: React.FC = () => {
                 type="number"
                 min={1}
                 value={batchIndex}
-                onChange={(e) => setBatchIndex(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (val === '') {
+                    setBatchIndex('');
+                  } else {
+                    const parsed = parseInt(val, 10);
+                    if (!isNaN(parsed)) {
+                      setBatchIndex(parsed);
+                    }
+                  }
+                }}
+                onBlur={() => {
+                  if (batchIndex === '' || batchIndex < 1) {
+                    setBatchIndex(1);
+                  }
+                }}
                 className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-xs text-white font-mono"
               />
             </div>

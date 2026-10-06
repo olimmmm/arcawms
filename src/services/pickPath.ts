@@ -37,6 +37,68 @@ export function formatLocationId(unit: number, drawer: 'A' | 'B' | 'C', batch_in
   return `${unit}.${drawer}.${String(batch_index).padStart(2, '0')}`;
 }
 
+export interface SmartBatchLocation {
+  unit: number;
+  drawer: 'A' | 'B' | 'C';
+  batchIndex: number;
+}
+
+/**
+ * Automatically selects the first available Unit and the first Drawer within that unit
+ * that contains strictly fewer than 12 non-empty batches.
+ * 
+ * @param instances Array of card instances
+ * @param totalUnits Current total dynamic units
+ */
+export function getSmartDefaultBatchLocation(
+  instances: CardInstance[],
+  totalUnits = 9
+): SmartBatchLocation {
+  const DRAWERS: ('A' | 'B' | 'C')[] = ['A', 'B', 'C'];
+
+  // Map: `${unit}.${drawer}` -> Set<number> containing non-empty batch indices
+  const drawerBatches = new Map<string, Set<number>>();
+
+  for (const inst of instances) {
+    if (inst.state !== 'A' || !inst.location_id) continue;
+    const coord = parseLocationId(inst.location_id);
+    if (!coord.valid || coord.unit < 1) continue;
+
+    const key = `${coord.unit}.${coord.drawer}`;
+    if (!drawerBatches.has(key)) {
+      drawerBatches.set(key, new Set<number>());
+    }
+    drawerBatches.get(key)!.add(coord.batch_index);
+  }
+
+  // Scan Units 1..totalUnits in order, and Drawers A, B, C in order
+  for (let u = 1; u <= totalUnits; u++) {
+    for (const d of DRAWERS) {
+      const key = `${u}.${d}`;
+      const activeBatches = drawerBatches.get(key) || new Set<number>();
+
+      // Condition: strictly fewer than 12 non-empty batches
+      if (activeBatches.size < 12) {
+        let nextBatch = 1;
+        while (activeBatches.has(nextBatch)) {
+          nextBatch++;
+        }
+        return {
+          unit: u,
+          drawer: d,
+          batchIndex: nextBatch
+        };
+      }
+    }
+  }
+
+  return {
+    unit: 1,
+    drawer: 'A',
+    batchIndex: 1
+  };
+}
+
 /**
  * Hierarchical 3-tier non-backtracking sorting:
  * 1. Unit (1 -> 9)

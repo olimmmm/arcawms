@@ -51,13 +51,13 @@ export const SkeuomorphicViewer: React.FC = () => {
   const [returningInstance, setReturningInstance] = useState<CardInstance | null>(null);
   const [returnUnit, setReturnUnit] = useState<number>(1);
   const [returnDrawer, setReturnDrawer] = useState<'A' | 'B' | 'C'>('A');
-  const [returnBatch, setReturnBatch] = useState<number>(1);
+  const [returnBatch, setReturnBatch] = useState<number | ''>(1);
 
   // Relocate modal for moving card between drawer batches
   const [relocatingInstance, setRelocatingInstance] = useState<CardInstance | null>(null);
   const [relocateUnit, setRelocateUnit] = useState<number>(1);
   const [relocateDrawer, setRelocateDrawer] = useState<'A' | 'B' | 'C'>('A');
-  const [relocateBatch, setRelocateBatch] = useState<number>(1);
+  const [relocateBatch, setRelocateBatch] = useState<number | ''>(1);
 
   // Undo notification state
   const [activeUndo, setActiveUndo] = useState<UndoAction | null>(null);
@@ -341,7 +341,8 @@ export const SkeuomorphicViewer: React.FC = () => {
     if (!relocatingInstance) return;
     playSound('success');
     triggerHaptic('medium');
-    const newLoc = formatLocationId(relocateUnit, relocateDrawer, relocateBatch);
+    const effBatch = typeof relocateBatch === 'number' && relocateBatch >= 1 ? relocateBatch : 1;
+    const newLoc = formatLocationId(relocateUnit, relocateDrawer, effBatch);
     const oldLoc = relocatingInstance.location_id || 'unassigned';
     triggerUndoableAction(
       'relocate',
@@ -365,7 +366,8 @@ export const SkeuomorphicViewer: React.FC = () => {
     if (!returningInstance) return;
     playSound('success');
     triggerHaptic('medium');
-    const locId = formatLocationId(returnUnit, returnDrawer, returnBatch);
+    const effBatch = typeof returnBatch === 'number' && returnBatch >= 1 ? returnBatch : 1;
+    const locId = formatLocationId(returnUnit, returnDrawer, effBatch);
     triggerUndoableAction(
       'return',
       returningInstance,
@@ -890,7 +892,20 @@ export const SkeuomorphicViewer: React.FC = () => {
                   type="number"
                   min={1}
                   value={returnBatch}
-                  onChange={(e) => setReturnBatch(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (val === '') {
+                      setReturnBatch('');
+                    } else {
+                      const p = parseInt(val, 10);
+                      if (!isNaN(p)) setReturnBatch(p);
+                    }
+                  }}
+                  onBlur={() => {
+                    if (returnBatch === '' || returnBatch < 1) {
+                      setReturnBatch(1);
+                    }
+                  }}
                   className="w-full bg-slate-900 border border-slate-700 rounded p-1.5 text-white"
                 />
               </div>
@@ -957,7 +972,20 @@ export const SkeuomorphicViewer: React.FC = () => {
                   type="number"
                   min={1}
                   value={relocateBatch}
-                  onChange={(e) => setRelocateBatch(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (val === '') {
+                      setRelocateBatch('');
+                    } else {
+                      const p = parseInt(val, 10);
+                      if (!isNaN(p)) setRelocateBatch(p);
+                    }
+                  }}
+                  onBlur={() => {
+                    if (relocateBatch === '' || relocateBatch < 1) {
+                      setRelocateBatch(1);
+                    }
+                  }}
                   className="w-full bg-slate-900 border border-slate-700 rounded p-1.5 text-white"
                 />
               </div>

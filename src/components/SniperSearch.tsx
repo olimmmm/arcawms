@@ -26,7 +26,7 @@ import {
   CARD_BACK_IMAGE, 
   enrichMissingCards 
 } from '../services/scryfall';
-import { formatLocationId, parseLocationId } from '../services/pickPath';
+import { formatLocationId, parseLocationId, getSmartDefaultBatchLocation } from '../services/pickPath';
 import { playSound, triggerHaptic } from '../services/audio';
 
 export type SortOption =
@@ -154,19 +154,19 @@ export const SniperSearch: React.FC = () => {
   const [editingInstance, setEditingInstance] = useState<CardInstance | null>(null);
   const [editUnit, setEditUnit] = useState(1);
   const [editDrawer, setEditDrawer] = useState<'A' | 'B' | 'C'>('A');
-  const [editBatch, setEditBatch] = useState(1);
+  const [editBatch, setEditBatch] = useState<number | ''>(1);
 
   // Return to Chaos Drawer modal
   const [returningInstance, setReturningInstance] = useState<CardInstance | null>(null);
   const [returnUnit, setReturnUnit] = useState(1);
   const [returnDrawer, setReturnDrawer] = useState<'A' | 'B' | 'C'>('A');
-  const [returnBatch, setReturnBatch] = useState(1);
+  const [returnBatch, setReturnBatch] = useState<number | ''>(1);
 
   // Add new copy modal
   const [quickAddCard, setQuickAddCard] = useState<ScryfallCard | null>(null);
   const [addUnit, setAddUnit] = useState(1);
   const [addDrawer, setAddDrawer] = useState<'A' | 'B' | 'C'>('A');
-  const [addBatch, setAddBatch] = useState(1);
+  const [addBatch, setAddBatch] = useState<number | ''>(1);
 
   // Reactive DB subscriptions
   const [instances, setInstances] = useState<CardInstance[]>(() => db.getAllInstances());
@@ -356,7 +356,8 @@ export const SniperSearch: React.FC = () => {
     if (!returningInstance) return;
     playSound('success');
     triggerHaptic('medium');
-    const locId = formatLocationId(returnUnit, returnDrawer, returnBatch);
+    const effBatch = typeof returnBatch === 'number' && returnBatch >= 1 ? returnBatch : 1;
+    const locId = formatLocationId(returnUnit, returnDrawer, effBatch);
     db.returnToChaos(returningInstance.instance_id, locId);
     setReturningInstance(null);
   };
@@ -374,9 +375,20 @@ export const SniperSearch: React.FC = () => {
   const handleSaveEdit = () => {
     if (!editingInstance) return;
     playSound('success');
-    const locId = formatLocationId(editUnit, editDrawer, editBatch);
+    const effBatch = typeof editBatch === 'number' && editBatch >= 1 ? editBatch : 1;
+    const locId = formatLocationId(editUnit, editDrawer, effBatch);
     db.updateLocation(editingInstance.instance_id, locId);
     setEditingInstance(null);
+  };
+
+  // Open Quick Add with smart default batch location (< 12 non-empty batches)
+  const handleOpenQuickAdd = (card: ScryfallCard) => {
+    playSound('click');
+    const smart = getSmartDefaultBatchLocation(db.getAllInstances(), db.getUnitCount());
+    setAddUnit(smart.unit);
+    setAddDrawer(smart.drawer);
+    setAddBatch(smart.batchIndex);
+    setQuickAddCard(card);
   };
 
   // Add new physical copy
@@ -384,7 +396,8 @@ export const SniperSearch: React.FC = () => {
     if (!quickAddCard) return;
     playSound('success');
     triggerHaptic('medium');
-    const locId = formatLocationId(addUnit, addDrawer, addBatch);
+    const effBatch = typeof addBatch === 'number' && addBatch >= 1 ? addBatch : 1;
+    const locId = formatLocationId(addUnit, addDrawer, effBatch);
     db.upsertCard(quickAddCard);
     db.createInstance({
       oracle_id: quickAddCard.oracle_id,
@@ -581,8 +594,8 @@ export const SniperSearch: React.FC = () => {
                   </div>
 
                   <button
-                    onClick={() => { setQuickAddCard(card); playSound('click'); }}
-                    className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-slate-300 hover:text-white flex items-center gap-1.5 border border-slate-700 transition"
+                    onClick={() => handleOpenQuickAdd(card)}
+                    className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-slate-300 hover:text-white flex items-center gap-1.5 border border-slate-700 transition cursor-pointer"
                   >
                     <Plus className="h-3.5 w-3.5 text-amber-400" />
                     <span>+ Add Copy</span>
@@ -792,7 +805,20 @@ export const SniperSearch: React.FC = () => {
                   type="number"
                   min={1}
                   value={returnBatch}
-                  onChange={(e) => setReturnBatch(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (val === '') {
+                      setReturnBatch('');
+                    } else {
+                      const p = parseInt(val, 10);
+                      if (!isNaN(p)) setReturnBatch(p);
+                    }
+                  }}
+                  onBlur={() => {
+                    if (returnBatch === '' || returnBatch < 1) {
+                      setReturnBatch(1);
+                    }
+                  }}
                   className="w-full bg-slate-900 border border-slate-700 rounded p-1.5 text-white"
                 />
               </div>
@@ -856,7 +882,20 @@ export const SniperSearch: React.FC = () => {
                   type="number"
                   min={1}
                   value={editBatch}
-                  onChange={(e) => setEditBatch(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (val === '') {
+                      setEditBatch('');
+                    } else {
+                      const p = parseInt(val, 10);
+                      if (!isNaN(p)) setEditBatch(p);
+                    }
+                  }}
+                  onBlur={() => {
+                    if (editBatch === '' || editBatch < 1) {
+                      setEditBatch(1);
+                    }
+                  }}
                   className="w-full bg-slate-900 border border-slate-700 rounded p-1.5 text-white"
                 />
               </div>
@@ -920,7 +959,20 @@ export const SniperSearch: React.FC = () => {
                   type="number"
                   min={1}
                   value={addBatch}
-                  onChange={(e) => setAddBatch(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (val === '') {
+                      setAddBatch('');
+                    } else {
+                      const p = parseInt(val, 10);
+                      if (!isNaN(p)) setAddBatch(p);
+                    }
+                  }}
+                  onBlur={() => {
+                    if (addBatch === '' || addBatch < 1) {
+                      setAddBatch(1);
+                    }
+                  }}
                   className="w-full bg-slate-900 border border-slate-700 rounded p-1.5 text-white"
                 />
               </div>

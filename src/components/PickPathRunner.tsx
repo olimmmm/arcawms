@@ -31,7 +31,7 @@ const SAMPLE_WANTS = `1 Sol Ring
 
 export const PickPathRunner: React.FC = () => {
   const [phase, setPhase] = useState<'setup' | 'running'>('setup');
-  const [decklistText, setDecklistText] = useState(SAMPLE_WANTS);
+  const [decklistText, setDecklistText] = useState('');
   const [route, setRoute] = useState<PickItem[]>([]);
 
   // Reactive DB subscriptions
