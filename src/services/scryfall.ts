@@ -389,6 +389,52 @@ export function parseSyntaxQuery(query: string): SyntaxToken[][] {
   return orGroups;
 }
 
+const COLOR_ALIAS_MAP: Record<string, string[]> = {
+  // Guilds
+  azorius: ['W', 'U'],
+  dimir: ['U', 'B'],
+  rakdos: ['B', 'R'],
+  gruul: ['R', 'G'],
+  selesnya: ['W', 'G'],
+  orzhov: ['W', 'B'],
+  golgari: ['B', 'G'],
+  simic: ['U', 'G'],
+  izzet: ['U', 'R'],
+  boros: ['W', 'R'],
+  // Shards / Wedges
+  esper: ['W', 'U', 'B'],
+  grixis: ['U', 'B', 'R'],
+  jund: ['B', 'R', 'G'],
+  naya: ['W', 'R', 'G'],
+  bant: ['W', 'U', 'G'],
+  abzan: ['W', 'B', 'G'],
+  jeskai: ['U', 'R', 'W'],
+  sultai: ['B', 'G', 'U'],
+  mardu: ['R', 'W', 'B'],
+  temur: ['G', 'U', 'R'],
+  // 4-Color
+  glint: ['U', 'B', 'R', 'G'],
+  dune: ['W', 'B', 'R', 'G'],
+  ink: ['W', 'U', 'R', 'G'],
+  witch: ['W', 'U', 'B', 'G'],
+  yore: ['W', 'U', 'B', 'R'],
+  // 5-Color
+  wubrg: ['W', 'U', 'B', 'R', 'G'],
+  fivecolor: ['W', 'U', 'B', 'R', 'G'],
+};
+
+export function parseAllowedColors(val: string): { isColorless: boolean; allowedColors: string[] } {
+  const cleanVal = val.toLowerCase().trim();
+  if (cleanVal === 'c' || cleanVal === 'colorless') {
+    return { isColorless: true, allowedColors: [] };
+  }
+  if (COLOR_ALIAS_MAP[cleanVal]) {
+    return { isColorless: false, allowedColors: COLOR_ALIAS_MAP[cleanVal] };
+  }
+  const chars = Array.from(new Set(cleanVal.toUpperCase().split('').filter(c => ['W', 'U', 'B', 'R', 'G'].includes(c))));
+  return { isColorless: chars.length === 0, allowedColors: chars };
+}
+
 /**
  * Evaluates whether a card matches the parsed Scryfall syntax tokens
  */
@@ -433,8 +479,24 @@ export function cardMatchesSyntax(card: ScryfallCard, orGroups: SyntaxToken[][])
           case 'id':
           case 'ci':
           case 'identity': {
-            const reqColors = val.toUpperCase().split('');
-            matches = reqColors.every(c => card.color_identity.includes(c));
+            const { isColorless, allowedColors } = parseAllowedColors(val);
+            const cardId = card.color_identity || [];
+
+            if (isColorless) {
+              matches = cardId.length === 0;
+            } else if (token.op === '=') {
+              matches = cardId.length === allowedColors.length && cardId.every(c => allowedColors.includes(c));
+            } else if (token.op === '>=') {
+              matches = allowedColors.every(c => cardId.includes(c));
+            } else if (token.op === '>') {
+              matches = allowedColors.every(c => cardId.includes(c)) && cardId.length > allowedColors.length;
+            } else if (token.op === '<') {
+              matches = cardId.every(c => allowedColors.includes(c)) && cardId.length < allowedColors.length;
+            } else {
+              // MTG Commander identity inclusion (subsetting):
+              // All colors in cardId must be contained in allowedColors (colorless cards cardId=[] trivially match)
+              matches = cardId.every(c => allowedColors.includes(c));
+            }
             break;
           }
           case 'o':
@@ -450,13 +512,12 @@ export function cardMatchesSyntax(card: ScryfallCard, orGroups: SyntaxToken[][])
             matches = card.name.toLowerCase().includes(val);
             break;
           default:
-            matches = card.name.toLowerCase().includes(val) || card.type_line.toLowerCase().includes(val);
+            matches = card.name.toLowerCase().includes(val);
         }
       } else if (token.rawText) {
         const lowerText = token.rawText.toLowerCase();
-        matches = card.name.toLowerCase().includes(lowerText) ||
-                  card.type_line.toLowerCase().includes(lowerText) ||
-                  (card.oracle_text || '').toLowerCase().includes(lowerText);
+        // Plain text search targets card names ONLY
+        matches = card.name.toLowerCase().includes(lowerText);
       }
 
       return token.negated ? !matches : matches;

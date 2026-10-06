@@ -12,7 +12,8 @@ import {
   Check,
   Layers,
   ShoppingBag,
-  Undo2
+  Undo2,
+  ArrowUpDown
 } from 'lucide-react';
 import { CardInstance, ScryfallCard } from '../types';
 import { db } from '../services/db';
@@ -28,12 +29,86 @@ import {
 import { formatLocationId, parseLocationId } from '../services/pickPath';
 import { playSound, triggerHaptic } from '../services/audio';
 
+export type SortOption =
+  | 'name_asc'
+  | 'name_desc'
+  | 'cmc_asc'
+  | 'cmc_desc'
+  | 'color_identity'
+  | 'price_desc'
+  | 'price_asc'
+  | 'type';
+
+const WUBRG_ORDER: Record<string, number> = { W: 1, U: 2, B: 3, R: 4, G: 5 };
+
+function getColorIdentitySortKey(identity?: string[]): string {
+  if (!identity || identity.length === 0) return '0_colorless';
+  const sorted = [...identity].sort((a, b) => (WUBRG_ORDER[a] || 99) - (WUBRG_ORDER[b] || 99)).join('');
+  return `${identity.length}_${sorted}`;
+}
+
+function getPrimaryTypeSortRank(typeLine?: string): number {
+  if (!typeLine) return 99;
+  const lower = typeLine.toLowerCase();
+  if (lower.includes('creature')) return 1;
+  if (lower.includes('planeswalker')) return 2;
+  if (lower.includes('battle')) return 3;
+  if (lower.includes('instant')) return 4;
+  if (lower.includes('sorcery')) return 5;
+  if (lower.includes('artifact')) return 6;
+  if (lower.includes('enchantment')) return 7;
+  if (lower.includes('land')) return 8;
+  return 9;
+}
+
+export function sortCards(cards: ScryfallCard[], sortOption: SortOption): ScryfallCard[] {
+  return [...cards].sort((a, b) => {
+    switch (sortOption) {
+      case 'name_asc':
+        return a.name.localeCompare(b.name);
+      case 'name_desc':
+        return b.name.localeCompare(a.name);
+      case 'cmc_asc': {
+        const diff = (a.cmc ?? 0) - (b.cmc ?? 0);
+        return diff !== 0 ? diff : a.name.localeCompare(b.name);
+      }
+      case 'cmc_desc': {
+        const diff = (b.cmc ?? 0) - (a.cmc ?? 0);
+        return diff !== 0 ? diff : a.name.localeCompare(b.name);
+      }
+      case 'price_desc': {
+        const diff = (b.price_eur ?? 0) - (a.price_eur ?? 0);
+        return diff !== 0 ? diff : a.name.localeCompare(b.name);
+      }
+      case 'price_asc': {
+        const diff = (a.price_eur ?? 0) - (b.price_eur ?? 0);
+        return diff !== 0 ? diff : a.name.localeCompare(b.name);
+      }
+      case 'color_identity': {
+        const keyA = getColorIdentitySortKey(a.color_identity);
+        const keyB = getColorIdentitySortKey(b.color_identity);
+        const diff = keyA.localeCompare(keyB);
+        return diff !== 0 ? diff : a.name.localeCompare(b.name);
+      }
+      case 'type': {
+        const diff = getPrimaryTypeSortRank(a.type_line) - getPrimaryTypeSortRank(b.type_line);
+        return diff !== 0 ? diff : a.name.localeCompare(b.name);
+      }
+      default:
+        return a.name.localeCompare(b.name);
+    }
+  });
+}
+
 export const SniperSearch: React.FC = () => {
   const [query, setQuery] = useState('');
   const [scope, setScope] = useState<'inventory' | 'global'>('inventory');
   const [globalResults, setGlobalResults] = useState<ScryfallCard[]>([]);
   const [isSearchingGlobal, setIsSearchingGlobal] = useState(false);
   const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [sortOption, setSortOption] = useState<SortOption>(() => {
+    return (localStorage.getItem('arcawms_search_sort') as SortOption) || 'name_asc';
+  });
 
   // Session state to support on-page UNDO for cards moved or removed on this page
   const [recentlyMoved, setRecentlyMoved] = useState<Map<string, { fromLoc: string }>>(new Map());
@@ -131,6 +206,25 @@ export const SniperSearch: React.FC = () => {
       return cardMatchesSyntax(card, clauses);
     });
   }, [cards, query, scope, globalResults, instancesByOracleId, recentlyRemoved]);
+
+  const executeGlobalSearch = async (searchTerm: string) => {
+    if (!searchTerm.trim() || searchTerm.trim().length < 2) return;
+    setIsSearchingGlobal(true);
+    setSuggestions([]);
+    const results = await searchScryfallAPI(searchTerm.trim());
+    setGlobalResults(results);
+    setIsSearchingGlobal(false);
+  };
+
+  const handleSortChange = (newSort: SortOption) => {
+    setSortOption(newSort);
+    localStorage.setItem('arcawms_search_sort', newSort);
+    playSound('click');
+  };
+
+  const sortedCards = useMemo(() => {
+    return sortCards(filteredCards, sortOption);
+  }, [filteredCards, sortOption]);
 
   const addSyntaxPill = (filterText: string) => {
     playSound('click');
@@ -265,7 +359,19 @@ export const SniperSearch: React.FC = () => {
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder='Search card name or Scryfall syntax (e.g. cmc:3, t:creature, c:u)...'
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  setSuggestions([]);
+                  if (scope === 'global' && query.trim().length >= 2) {
+                    executeGlobalSearch(query);
+                  }
+                  (e.target as HTMLInputElement).blur();
+                } else if (e.key === 'Escape') {
+                  setSuggestions([]);
+                }
+              }}
+              placeholder='Search card name or Scryfall syntax (e.g. cmc:3, t:creature, id:w)...'
               className="w-full bg-slate-900 border border-slate-700/80 rounded-2xl pl-12 pr-10 py-3.5 text-base text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-amber-500 shadow-lg font-sans"
               autoFocus
             />
@@ -306,6 +412,7 @@ export const SniperSearch: React.FC = () => {
             <button onClick={() => addSyntaxPill('cmc<=2')} className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700">cmc&lt;=2</button>
             <button onClick={() => addSyntaxPill('t:creature')} className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700">t:creature</button>
             <button onClick={() => addSyntaxPill('c:u')} className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700">c:u</button>
+            <button onClick={() => addSyntaxPill('id:w')} className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700">id:w</button>
             <button onClick={() => addSyntaxPill('o:"draw"')} className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700">o:draw</button>
           </div>
 
@@ -331,6 +438,40 @@ export const SniperSearch: React.FC = () => {
         </div>
       </div>
 
+      {/* Search & Collection Results Header with Sorting */}
+      <div className="flex flex-wrap items-center justify-between gap-3 px-1 pt-1 border-b border-slate-800/80 pb-3">
+        <div className="flex items-center gap-2 text-xs font-mono text-slate-400">
+          <span>
+            {query.trim() ? 'Matching cards:' : 'Full collection:'}{' '}
+            <strong className="text-white font-bold">{sortedCards.length}</strong>
+          </span>
+          {query.trim() && (
+            <span className="text-slate-500">
+              for &quot;<span className="text-amber-400">{query}</span>&quot;
+            </span>
+          )}
+        </div>
+
+        <div className="flex items-center gap-2 text-xs font-mono">
+          <ArrowUpDown className="h-3.5 w-3.5 text-slate-400" />
+          <span className="text-slate-400 hidden sm:inline">Sort:</span>
+          <select
+            value={sortOption}
+            onChange={(e) => handleSortChange(e.target.value as SortOption)}
+            className="bg-slate-900 border border-slate-700 hover:border-slate-600 text-slate-200 text-xs rounded-xl px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-amber-500 font-sans cursor-pointer transition shadow"
+          >
+            <option value="name_asc">Name (A → Z)</option>
+            <option value="name_desc">Name (Z → A)</option>
+            <option value="cmc_asc">Mana Value (Low → High)</option>
+            <option value="cmc_desc">Mana Value (High → Low)</option>
+            <option value="color_identity">Colour Identity (WUBRG)</option>
+            <option value="price_desc">Price (High → Low)</option>
+            <option value="price_asc">Price (Low → High)</option>
+            <option value="type">Primary Card Type</option>
+          </select>
+        </div>
+      </div>
+
       {isSearchingGlobal && (
         <div className="p-8 text-center text-slate-400 text-xs">
           Searching Scryfall database...
@@ -339,13 +480,13 @@ export const SniperSearch: React.FC = () => {
 
       {/* Cards List */}
       <div className="space-y-4">
-        {filteredCards.length === 0 && !isSearchingGlobal && (
+        {sortedCards.length === 0 && !isSearchingGlobal && (
           <div className="p-10 text-center bg-slate-900/60 rounded-2xl border border-slate-800 text-slate-400 text-xs">
             No cards matched &quot;{query}&quot;. Try switching to Scryfall search or clearing filters.
           </div>
         )}
 
-        {filteredCards.map((card) => {
+        {sortedCards.map((card) => {
           const cardInstances = (instancesByOracleId.get(card.oracle_id) || instancesByOracleId.get(card.name.toLowerCase()) || []);
           
           // Also look for recently removed instances for this card to show on-page undo

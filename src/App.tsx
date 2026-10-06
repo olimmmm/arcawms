@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useLayoutEffect } from 'react';
 import { Navbar } from './components/Navbar';
 import { SniperSearch } from './components/SniperSearch';
 import { PickPathRunner } from './components/PickPathRunner';
@@ -18,6 +18,24 @@ export function App() {
     () => syncClient.getStatus()
   );
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+
+  // Cross-tab scroll position memory
+  const scrollPositions = useRef<Record<string, number>>({});
+
+  const handleTabChange = (nextTab: 'search' | 'pickpath' | 'cabinet' | 'ingest') => {
+    if (nextTab === activeTab) return;
+    scrollPositions.current[activeTab] = window.scrollY;
+    setActiveTab(nextTab);
+  };
+
+  useLayoutEffect(() => {
+    const targetY = scrollPositions.current[activeTab] || 0;
+    window.scrollTo({ top: targetY, behavior: 'instant' as ScrollBehavior });
+    const raf = requestAnimationFrame(() => {
+      window.scrollTo({ top: targetY, behavior: 'instant' as ScrollBehavior });
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [activeTab]);
 
   useEffect(() => {
     applyTheme(getActiveTheme());
@@ -40,17 +58,25 @@ export function App() {
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
       <Navbar
         activeTab={activeTab}
-        setActiveTab={setActiveTab}
+        setActiveTab={handleTabChange}
         stats={stats}
         syncStatus={syncStatus}
         onOpenSettings={() => setIsSettingsOpen(true)}
       />
 
       <main className="flex-1 pb-16">
-        {activeTab === 'search' && <SniperSearch />}
-        {activeTab === 'pickpath' && <PickPathRunner />}
-        {activeTab === 'cabinet' && <SkeuomorphicViewer />}
-        {activeTab === 'ingest' && <IngestEngine />}
+        <div style={{ display: activeTab === 'search' ? 'block' : 'none' }}>
+          <SniperSearch />
+        </div>
+        <div style={{ display: activeTab === 'pickpath' ? 'block' : 'none' }}>
+          <PickPathRunner />
+        </div>
+        <div style={{ display: activeTab === 'cabinet' ? 'block' : 'none' }}>
+          <SkeuomorphicViewer />
+        </div>
+        <div style={{ display: activeTab === 'ingest' ? 'block' : 'none' }}>
+          <IngestEngine />
+        </div>
       </main>
 
       <SettingsSyncModal
