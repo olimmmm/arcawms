@@ -110,9 +110,45 @@ export const SniperSearch: React.FC = () => {
     return (localStorage.getItem('arcawms_search_sort') as SortOption) || 'name_asc';
   });
 
-  // Session state to support on-page UNDO for cards moved or removed on this page
-  const [recentlyMoved, setRecentlyMoved] = useState<Map<string, { fromLoc: string }>>(new Map());
-  const [recentlyRemoved, setRecentlyRemoved] = useState<Map<string, CardInstance>>(new Map());
+  // Session state to support on-page UNDO for cards moved or removed on this page (persists across refresh)
+  const SESSION_KEY_MOVED = 'arcawms_recently_moved_session';
+  const SESSION_KEY_REMOVED = 'arcawms_recently_removed_session';
+
+  const [recentlyMoved, setRecentlyMovedState] = useState<Map<string, { fromLoc: string }>>(() => {
+    try {
+      const raw = sessionStorage.getItem(SESSION_KEY_MOVED);
+      if (raw) return new Map(JSON.parse(raw));
+    } catch {}
+    return new Map();
+  });
+
+  const [recentlyRemoved, setRecentlyRemovedState] = useState<Map<string, CardInstance>>(() => {
+    try {
+      const raw = sessionStorage.getItem(SESSION_KEY_REMOVED);
+      if (raw) return new Map(JSON.parse(raw));
+    } catch {}
+    return new Map();
+  });
+
+  const setRecentlyMoved = (updater: React.SetStateAction<Map<string, { fromLoc: string }>>) => {
+    setRecentlyMovedState(prev => {
+      const next = typeof updater === 'function' ? updater(prev) : updater;
+      try {
+        sessionStorage.setItem(SESSION_KEY_MOVED, JSON.stringify(Array.from(next.entries())));
+      } catch {}
+      return next;
+    });
+  };
+
+  const setRecentlyRemoved = (updater: React.SetStateAction<Map<string, CardInstance>>) => {
+    setRecentlyRemovedState(prev => {
+      const next = typeof updater === 'function' ? updater(prev) : updater;
+      try {
+        sessionStorage.setItem(SESSION_KEY_REMOVED, JSON.stringify(Array.from(next.entries())));
+      } catch {}
+      return next;
+    });
+  };
 
   // Editing coordinate modal
   const [editingInstance, setEditingInstance] = useState<CardInstance | null>(null);
@@ -168,13 +204,17 @@ export const SniperSearch: React.FC = () => {
     }
   }, [query, scope]);
 
-  // Group instances by oracle_id or card_name
+  // Group instances by oracle_id and card_name
   const instancesByOracleId = useMemo(() => {
     const map = new Map<string, CardInstance[]>();
     for (const inst of instances) {
-      const key = inst.oracle_id || inst.card_name.toLowerCase();
-      if (!map.has(key)) map.set(key, []);
-      map.get(key)!.push(inst);
+      if (inst.oracle_id) {
+        if (!map.has(inst.oracle_id)) map.set(inst.oracle_id, []);
+        map.get(inst.oracle_id)!.push(inst);
+      }
+      const nameKey = inst.card_name.trim().toLowerCase();
+      if (!map.has(nameKey)) map.set(nameKey, []);
+      map.get(nameKey)!.push(inst);
     }
     return map;
   }, [instances]);
@@ -197,9 +237,14 @@ export const SniperSearch: React.FC = () => {
     const dedupedCards = Array.from(dedupedMap.values());
 
     return dedupedCards.filter(card => {
-      const hasInstances = (instancesByOracleId.get(card.oracle_id) || instancesByOracleId.get(card.name.toLowerCase()) || []).length > 0;
+      const cleanName = card.name.trim().toLowerCase();
+      const instancesForCard = [
+        ...(instancesByOracleId.get(card.oracle_id) || []),
+        ...(instancesByOracleId.get(cleanName) || [])
+      ];
+      const hasInstances = instancesForCard.length > 0;
       const hasRemoved = Array.from(recentlyRemoved.values()).some(
-        r => r.oracle_id === card.oracle_id || r.card_name.toLowerCase() === card.name.toLowerCase()
+        r => r.oracle_id === card.oracle_id || r.card_name.trim().toLowerCase() === cleanName
       );
       if (!hasInstances && !hasRemoved && !query.trim()) return false;
       if (!query.trim()) return true;
@@ -487,11 +532,15 @@ export const SniperSearch: React.FC = () => {
         )}
 
         {sortedCards.map((card) => {
-          const cardInstances = (instancesByOracleId.get(card.oracle_id) || instancesByOracleId.get(card.name.toLowerCase()) || []);
+          const rawInstances = [
+            ...(instancesByOracleId.get(card.oracle_id) || []),
+            ...(instancesByOracleId.get(card.name.trim().toLowerCase()) || [])
+          ];
+          const cardInstances = Array.from(new Map(rawInstances.map(i => [i.instance_id, i])).values());
           
           // Also look for recently removed instances for this card to show on-page undo
           const removedForCard = Array.from(recentlyRemoved.values()).filter(
-            r => r.oracle_id === card.oracle_id || r.card_name.toLowerCase() === card.name.toLowerCase()
+            r => r.oracle_id === card.oracle_id || r.card_name.trim().toLowerCase() === card.name.trim().toLowerCase()
           );
 
           return (

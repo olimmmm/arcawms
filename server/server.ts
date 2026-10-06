@@ -46,7 +46,7 @@ function saveStore(data: any) {
     } catch (err) {
       console.error('[SyncServer] Failed to write store file:', err);
     }
-  }, 250);
+  }, 100);
 }
 
 function flushStoreSync() {
@@ -82,15 +82,16 @@ app.get('/api/sync/store', (req, res) => {
 });
 
 app.post('/api/sync/store', (req, res) => {
-  const { store } = req.body;
+  const { store, clientId } = req.body;
   if (store) {
     saveStore(store);
     broadcast({
-      type: 'SYNC_FULL_STATE',
+      type: 'STATE_UPDATE',
       payload: store,
-      timestamp: store.timestamp || Date.now()
+      clientId: clientId || null,
+      timestamp: store.timestamp || 0
     });
-    res.json({ success: true, timestamp: store.timestamp || Date.now() });
+    res.json({ success: true, timestamp: store.timestamp || 0 });
   } else {
     res.status(400).json({ error: 'Missing store data' });
   }
@@ -144,12 +145,12 @@ function broadcast(msg: any, senderWs?: WebSocket) {
 wss.on('connection', (ws) => {
   console.log(`[SyncServer] Client connected. (Active: ${wss.clients.size})`);
 
-  // Send current store if available
+  // Send current store if available (timestamp reflects stored data, never Date.now())
   if (currentStore) {
     ws.send(JSON.stringify({
       type: 'SYNC_FULL_STATE',
       payload: currentStore,
-      timestamp: currentStore.timestamp || Date.now()
+      timestamp: currentStore.timestamp || 0
     }));
   }
 

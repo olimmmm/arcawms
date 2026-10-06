@@ -359,6 +359,15 @@ class ArcaDatabase {
     return this.lastUpdated;
   }
 
+  public hasLocalStoredInstances(): boolean {
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY_INSTANCES);
+      return stored !== null && stored !== '[]';
+    } catch {
+      return false;
+    }
+  }
+
   private touchUpdated(ts?: number) {
     this.lastUpdated = ts || Date.now();
     try {
