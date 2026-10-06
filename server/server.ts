@@ -82,15 +82,17 @@ app.get('/api/sync/store', (req, res) => {
 });
 
 app.post('/api/sync/store', (req, res) => {
-  const { store, clientId } = req.body;
+  const { store, clientId, broadcastMutation } = req.body;
   if (store) {
     saveStore(store);
-    broadcast({
-      type: 'STATE_UPDATE',
-      payload: store,
-      clientId: clientId || null,
-      timestamp: store.timestamp || 0
-    });
+    if (broadcastMutation !== false) {
+      broadcast({
+        type: 'STATE_UPDATE',
+        payload: store,
+        clientId: clientId || null,
+        timestamp: store.timestamp || 0
+      });
+    }
     res.json({ success: true, timestamp: store.timestamp || 0 });
   } else {
     res.status(400).json({ error: 'Missing store data' });

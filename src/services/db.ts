@@ -297,7 +297,7 @@ class ArcaDatabase {
   private history: ActivityLogItem[] = [];
   private listeners: Set<() => void> = new Set();
   private initialized = false;
-  private lastUpdated: number = Date.now();
+  private lastUpdated: number = 0;
 
   constructor() {
     this.init();
@@ -309,9 +309,13 @@ class ArcaDatabase {
     try {
       const storedTs = localStorage.getItem(STORAGE_KEY_LAST_UPDATED);
       if (storedTs) {
-        this.lastUpdated = parseInt(storedTs, 10) || Date.now();
+        this.lastUpdated = parseInt(storedTs, 10) || 0;
+      } else {
+        this.lastUpdated = 0;
       }
-    } catch {}
+    } catch {
+      this.lastUpdated = 0;
+    }
 
     try {
       const storedCards = localStorage.getItem(STORAGE_KEY_CARDS);
@@ -368,35 +372,35 @@ class ArcaDatabase {
     }
   }
 
-  private touchUpdated(ts?: number) {
-    this.lastUpdated = ts || Date.now();
+  private safeSetItem(key: string, value: string): void {
     try {
-      localStorage.setItem(STORAGE_KEY_LAST_UPDATED, String(this.lastUpdated));
-    } catch {}
+      localStorage.setItem(key, value);
+    } catch (e) {
+      console.warn(`[ArcaDB] Quota warning on ${key}. Pruning snapshots to reclaim space.`);
+      try {
+        localStorage.removeItem('arcawms_snapshots_v1');
+        localStorage.setItem(key, value);
+      } catch (err) {
+        console.error(`[ArcaDB] Critical: failed to write ${key} to localStorage:`, err);
+      }
+    }
+  }
+
+  private touchUpdated(ts?: number) {
+    this.lastUpdated = (typeof ts === 'number' && ts > 0) ? ts : Date.now();
+    this.safeSetItem(STORAGE_KEY_LAST_UPDATED, String(this.lastUpdated));
   }
 
   private saveInstances() {
-    try {
-      localStorage.setItem(STORAGE_KEY_INSTANCES, JSON.stringify(Array.from(this.instances.values())));
-    } catch (e) {
-      console.warn('Failed to save instances:', e);
-    }
+    this.safeSetItem(STORAGE_KEY_INSTANCES, JSON.stringify(Array.from(this.instances.values())));
   }
 
   private saveCards() {
-    try {
-      localStorage.setItem(STORAGE_KEY_CARDS, JSON.stringify(Array.from(this.cards.values())));
-    } catch (e) {
-      console.warn('Failed to save cards:', e);
-    }
+    this.safeSetItem(STORAGE_KEY_CARDS, JSON.stringify(Array.from(this.cards.values())));
   }
 
   private saveHistory() {
-    try {
-      localStorage.setItem(STORAGE_KEY_HISTORY, JSON.stringify(this.history.slice(0, 200)));
-    } catch (e) {
-      console.warn('Failed to save history:', e);
-    }
+    this.safeSetItem(STORAGE_KEY_HISTORY, JSON.stringify(this.history.slice(0, 100)));
   }
 
   public subscribe(fn: () => void): () => void {
@@ -486,7 +490,6 @@ class ArcaDatabase {
       this.saveInstances();
     }
 
-    this.touchUpdated();
     this.notify();
   }
 
@@ -544,7 +547,6 @@ class ArcaDatabase {
     if (modified) {
       this.saveCards();
       this.saveInstances();
-      this.touchUpdated();
       this.notify();
     }
   }
@@ -968,11 +970,11 @@ class ArcaDatabase {
         timestamp: new Date().toISOString(),
         label,
         cardCount: this.instances.size,
-        instances: Array.from(this.instances.values()),
-        cards: Array.from(this.cards.values())
+        instances: Array.from(this.instances.values())
+        // Omit full cards array to prevent localStorage quota exhaustion on mobile
       };
-      const updated = [newSnap, ...existing].slice(0, 10);
-      localStorage.setItem('arcawms_snapshots_v1', JSON.stringify(updated));
+      const updated = [newSnap, ...existing].slice(0, 3);
+      this.safeSetItem('arcawms_snapshots_v1', JSON.stringify(updated));
     } catch (e) {
       console.warn('Failed to save snapshot:', e);
     }

@@ -35,7 +35,7 @@ class SyncClient {
         this.broadcastChannel.onmessage = (event) => {
           if (event.data?.type === 'TAB_MUTATION' && !this.isProcessingRemoteUpdate) {
             if (event.data.clientId !== CLIENT_ID) {
-              this.handleRemoteState(event.data.payload, true);
+              this.handleLiveBroadcast(event.data.payload, event.data.clientId);
             }
           }
         };
@@ -43,32 +43,20 @@ class SyncClient {
         console.warn('BroadcastChannel not supported:', e);
       }
 
-      // Check if this browser already has cards in local storage
-      const localCount = db.getAllInstances().length;
-      const hasStoredData = db.hasLocalStoredInstances();
-
-      if (hasStoredData && localCount > 0) {
-        // LOCAL STORAGE IS AUTHORITATIVE FOR THIS DEVICE.
-        // We do NOT pull or overwrite from server on startup.
-        // Instead, push current local state to ensure server has latest copy.
-        console.log(`[SyncClient] Local inventory found (${localCount} cards). Local state is authoritative.`);
-        this.schedulePush(50);
-      } else {
-        // First visit or fresh device with 0 cards: pull from server
-        this.checkServerStoreHttp();
-      }
+      // Query server state on startup to passively reconcile timestamps
+      this.checkServerStoreHttp();
 
       // Connect WebSocket for real-time multi-device sync
       this.connect();
 
-      // Listen to local DB changes to push to sync server
+      // Listen to local DB changes to push mutations to sync server & other devices
       db.subscribe(() => {
         if (!this.isProcessingRemoteUpdate) {
           this.schedulePush(100);
         }
       });
 
-      // Flushes any pending push immediately if the user reloads or navigates away
+      // Flushes any pending mutation immediately if the user reloads or navigates away
       const flushOnUnload = () => {
         this.flushImmediate();
       };
@@ -88,7 +76,7 @@ class SyncClient {
       if (res.ok) {
         const data = await res.json();
         if (data?.store) {
-          this.handleRemoteState(data.store, false);
+          this.reconcileWithServer(data.store);
         }
       }
     } catch {
@@ -130,25 +118,20 @@ class SyncClient {
 
       this.ws.onopen = () => {
         this.setStatus('connected');
-        // Once connected: if we have local cards, guarantee server is up to date
-        const localCount = db.getAllInstances().length;
-        if (localCount > 0) {
-          this.pushCurrentState();
-        }
       };
 
       this.ws.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data);
-          // If message is from ourselves, ignore it
+          // Ignore echoes of our own client's messages
           if (msg.clientId && msg.clientId === CLIENT_ID) return;
 
           if (msg.type === 'SYNC_FULL_STATE') {
-            // Server handshake / full state message
-            this.handleRemoteState(msg.payload, false);
+            // Passive handshake on WS connect
+            this.reconcileWithServer(msg.payload);
           } else if (msg.type === 'STATE_UPDATE') {
-            // Live broadcast update from another client
-            this.handleRemoteState(msg.payload, true);
+            // Live broadcast mutation from another active client
+            this.handleLiveBroadcast(msg.payload, msg.clientId);
           }
         } catch (e) {
           console.error('[ArcaSync] Error reading remote msg:', e);
@@ -177,69 +160,84 @@ class SyncClient {
   }
 
   /**
-   * Processes remote state.
-   * @param remotePayload Store payload from server
-   * @param isLiveBroadcast True if this came from an active multi-device broadcast during usage; false if from boot/connection handshake.
+   * Passive handshake with the server on boot/connection.
+   * Compares timestamps without blasting out mutations to active clients.
    */
-  private handleRemoteState(remotePayload: any, isLiveBroadcast = false) {
-    if (!remotePayload || !Array.isArray(remotePayload.instances)) return;
+  private reconcileWithServer(remoteStore: any) {
+    if (!remoteStore || !Array.isArray(remoteStore.instances)) return;
 
     const localCount = db.getAllInstances().length;
-    const remoteCount = remotePayload.instances.length;
+    const remoteCount = remoteStore.instances.length;
+    const localTs = parseTimestamp(db.getLastUpdated());
+    const remoteTs = parseTimestamp(remoteStore.timestamp || remoteStore.last_updated);
+
+    console.log(`[SyncClient] Handshake check — Local: ${localCount} cards (ts: ${localTs}) | Remote: ${remoteCount} cards (ts: ${remoteTs})`);
+
+    // Case 1: Server has newer changes from another device!
+    // (e.g. laptop added cards at 16:00, phone is connecting with stale 11:57 state)
+    if (remoteTs > localTs && remoteCount > 0) {
+      console.log(`[SyncClient] Remote store is newer than local (${remoteTs} > ${localTs}). Synchronizing from server.`);
+      this.isProcessingRemoteUpdate = true;
+      try {
+        if (remoteStore.settings?.theme) {
+          applyTheme(remoteStore.settings.theme as GuildThemeId);
+        }
+        db.importJSON(JSON.stringify(remoteStore), remoteTs);
+      } finally {
+        setTimeout(() => { this.isProcessingRemoteUpdate = false; }, 100);
+      }
+      return;
+    }
+
+    // Case 2: Local state is newer than server!
+    // (e.g. Render container restarted with stale seed data, or local edits happened while offline)
+    if (localTs > remoteTs && localCount > 0) {
+      console.log(`[SyncClient] Local store is newer than server (${localTs} > ${remoteTs}). Passively updating server.`);
+      this.pushCurrentState(false); // DO NOT broadcast mutation to other active clients
+      return;
+    }
+
+    // Case 3: Fresh device with 0 cards in local storage
+    if (localCount === 0 && remoteCount > 0) {
+      console.log(`[SyncClient] Fresh local device (0 cards). Importing ${remoteCount} cards from server.`);
+      this.isProcessingRemoteUpdate = true;
+      try {
+        if (remoteStore.settings?.theme) {
+          applyTheme(remoteStore.settings.theme as GuildThemeId);
+        }
+        db.importJSON(JSON.stringify(remoteStore), remoteTs);
+      } finally {
+        setTimeout(() => { this.isProcessingRemoteUpdate = false; }, 100);
+      }
+      return;
+    }
+
+    // Case 4: Timestamps are equal — both in sync!
+  }
+
+  /**
+   * Handles a live broadcast mutation emitted by another active client.
+   */
+  private handleLiveBroadcast(remotePayload: any, senderClientId?: string) {
+    if (!remotePayload || !Array.isArray(remotePayload.instances)) return;
+    if (senderClientId && senderClientId === CLIENT_ID) return;
+
     const localTs = parseTimestamp(db.getLastUpdated());
     const remoteTs = parseTimestamp(remotePayload.timestamp || remotePayload.last_updated);
+    const remoteCount = remotePayload.instances.length;
 
-    // CRITICAL PROTECTION RULE 1:
-    // If this is an initial server handshake (page load / reconnect) and local storage has cards,
-    // local storage is AUTHORITATIVE. NEVER overwrite local storage on boot!
-    if (!isLiveBroadcast && localCount > 0) {
-      console.log(`[SyncClient] Boot handshake: preserving populated local collection (${localCount} cards) and updating server.`);
-      this.schedulePush(50);
-      return;
-    }
-
-    // RULE 2: Never allow an empty remote store to wipe out a populated local collection
-    if (remoteCount === 0 && localCount > 0) {
-      console.warn('[SyncClient] Remote store is empty (0 cards) while local has', localCount, 'cards. Protecting local collection & updating server.');
-      this.schedulePush(50);
-      return;
-    }
-
-    // RULE 3: If local database has cards and local edits are newer or equal to remote, local ALWAYS wins
-    if (localCount > 0 && localTs >= remoteTs && remoteTs > 0) {
-      console.log('[SyncClient] Local state is newer or equal to server (local:', localTs, '>= remote:', remoteTs, '). Preserving local state & updating server.');
-      this.schedulePush(50);
-      return;
-    }
-
-    // RULE 4: If remote timestamp is missing or 0 and local has cards, protect local state
-    if (remoteTs === 0 && localCount > 0) {
-      console.warn('[SyncClient] Remote store has missing timestamp. Preserving local state.');
-      this.schedulePush(50);
-      return;
-    }
-
-    // RULE 5: If local has cards and remote has fewer cards, take an automatic safety snapshot before sync
-    if (localCount > 0 && remoteCount < localCount) {
-      console.warn('[SyncClient] Remote has fewer cards than local. Taking safety snapshot before sync.');
-      db.saveSnapshot(`Safety snapshot before sync (${localCount} -> ${remoteCount} cards)`);
-    }
-
-    // Apply remote update
-    this.isProcessingRemoteUpdate = true;
-    try {
-      if (remotePayload.settings?.theme) {
-        applyTheme(remotePayload.settings.theme as GuildThemeId);
+    // Only accept live broadcast if remote timestamp is genuinely newer
+    if (remoteTs > localTs && remoteCount > 0) {
+      console.log(`[SyncClient] Applying real-time update from client ${senderClientId} (${remoteCount} cards, ts: ${remoteTs}).`);
+      this.isProcessingRemoteUpdate = true;
+      try {
+        if (remotePayload.settings?.theme) {
+          applyTheme(remotePayload.settings.theme as GuildThemeId);
+        }
+        db.importJSON(JSON.stringify(remotePayload), remoteTs);
+      } finally {
+        setTimeout(() => { this.isProcessingRemoteUpdate = false; }, 100);
       }
-      const jsonStr = JSON.stringify(remotePayload);
-      db.importJSON(jsonStr, remoteTs || Date.now());
-      console.log(`[SyncClient] Successfully synchronized ${remoteCount} cards from remote update.`);
-    } catch (err) {
-      console.error('[SyncClient] Error applying remote state:', err);
-    } finally {
-      setTimeout(() => {
-        this.isProcessingRemoteUpdate = false;
-      }, 100);
     }
   }
 
@@ -247,7 +245,7 @@ class SyncClient {
     if (this.pushDebounceTimer) clearTimeout(this.pushDebounceTimer);
     this.pushDebounceTimer = setTimeout(() => {
       this.pushDebounceTimer = null;
-      this.pushCurrentState();
+      this.pushCurrentState(true);
     }, delay);
   }
 
@@ -256,10 +254,10 @@ class SyncClient {
       clearTimeout(this.pushDebounceTimer);
       this.pushDebounceTimer = null;
     }
-    this.pushCurrentState();
+    this.pushCurrentState(true);
   }
 
-  private pushCurrentState() {
+  private pushCurrentState(broadcastMutation = true) {
     const payload = {
       instances: db.getAllInstances(),
       cards: db.getAllCards(),
@@ -269,7 +267,7 @@ class SyncClient {
     };
 
     // 1. Multi-tab broadcast
-    if (this.broadcastChannel) {
+    if (this.broadcastChannel && broadcastMutation) {
       try {
         this.broadcastChannel.postMessage({
           type: 'TAB_MUTATION',
@@ -280,7 +278,7 @@ class SyncClient {
     }
 
     // 2. WebSocket push (real-time cross-device)
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN && broadcastMutation) {
       try {
         this.ws.send(JSON.stringify({
           type: 'STATE_UPDATE',
@@ -292,7 +290,11 @@ class SyncClient {
 
     // 3. Reliable HTTP POST fallback with keepalive: true
     try {
-      const body = JSON.stringify({ store: payload, clientId: CLIENT_ID });
+      const body = JSON.stringify({ 
+        store: payload, 
+        clientId: CLIENT_ID, 
+        broadcastMutation 
+      });
       fetch('/api/sync/store', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -310,7 +312,7 @@ class SyncClient {
     if (this.ws) {
       this.ws.close();
     }
-    this.pushCurrentState();
+    this.checkServerStoreHttp();
     this.connect();
   }
 }
