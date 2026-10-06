@@ -1,4 +1,5 @@
 import { ActivityLogItem, CardInstance, InventoryStats, ScryfallCard } from '../types';
+import { parseLocationId } from './pickPath';
 
 const STORAGE_KEY_INSTANCES = 'arcawms_instances_v2';
 const STORAGE_KEY_CARDS = 'arcawms_cards_v2';
@@ -1010,15 +1011,15 @@ class ArcaDatabase {
     }
   }
 
-  public getSettings(): { theme: string } {
+  public getSettings(): { theme: string; unitCount?: number } {
     try {
       const raw = localStorage.getItem('arcawms_settings_v1');
       if (raw) return JSON.parse(raw);
     } catch {}
-    return { theme: 'orzhov' };
+    return { theme: 'orzhov', unitCount: 9 };
   }
 
-  public updateSettings(settings: Partial<{ theme: string }>) {
+  public updateSettings(settings: Partial<{ theme: string; unitCount?: number }>) {
     const current = this.getSettings();
     const next = { ...current, ...settings };
     try {
@@ -1026,6 +1027,44 @@ class ArcaDatabase {
     } catch {}
     this.touchUpdated();
     this.notify();
+  }
+
+  public getUnitCount(): number {
+    const settings = this.getSettings();
+    let maxInstanceUnit = 9;
+    for (const inst of this.instances.values()) {
+      if (inst.state === 'A' && inst.location_id) {
+        const p = parseLocationId(inst.location_id);
+        if (p.valid && p.unit > maxInstanceUnit && p.unit < 999) {
+          maxInstanceUnit = p.unit;
+        }
+      }
+    }
+    const configured = typeof settings.unitCount === 'number' && settings.unitCount > 0 ? settings.unitCount : 9;
+    return Math.max(configured, maxInstanceUnit);
+  }
+
+  public addUnit(): number {
+    const current = this.getUnitCount();
+    const next = current + 1;
+    this.updateSettings({ unitCount: next });
+    return next;
+  }
+
+  public canRemoveUnit(unitNumber: number): boolean {
+    if (unitNumber <= 1) return false;
+    return !Array.from(this.instances.values()).some(inst => {
+      if (inst.state !== 'A' || !inst.location_id) return false;
+      const p = parseLocationId(inst.location_id);
+      return p.valid && p.unit === unitNumber;
+    });
+  }
+
+  public removeLastUnit(): boolean {
+    const current = this.getUnitCount();
+    if (current <= 1 || !this.canRemoveUnit(current)) return false;
+    this.updateSettings({ unitCount: current - 1 });
+    return true;
   }
 
   public exportJSON(): string {

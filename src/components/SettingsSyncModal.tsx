@@ -13,7 +13,10 @@ import {
   ShieldCheck,
   Clock,
   ChevronRight,
-  Sparkles
+  Sparkles,
+  Boxes,
+  Plus,
+  Minus
 } from 'lucide-react';
 import { db } from '../services/db';
 import { syncClient } from '../services/sync';
@@ -36,6 +39,7 @@ export const SettingsSyncModal: React.FC<SettingsSyncModalProps> = ({
   const [importStatus, setImportStatus] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [snapshots, setSnapshots] = useState<Array<{ id: string; timestamp: string; label: string; cardCount: number }>>([]);
+  const [unitCount, setUnitCount] = useState<number>(() => db.getUnitCount());
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleRefreshMetadata = async () => {
@@ -54,10 +58,29 @@ export const SettingsSyncModal: React.FC<SettingsSyncModalProps> = ({
     }
   };
 
+  const handleAddUnit = () => {
+    playSound('success');
+    const newCount = db.addUnit();
+    setUnitCount(newCount);
+    setImportStatus(`Added Unit ${newCount} to the Chaos Cabinet!`);
+  };
+
+  const handleRemoveLastUnit = () => {
+    if (db.canRemoveUnit(unitCount)) {
+      if (window.confirm(`Remove empty Unit ${unitCount}?`)) {
+        playSound('click');
+        db.removeLastUnit();
+        setUnitCount(db.getUnitCount());
+        setImportStatus(`Removed Unit ${unitCount}.`);
+      }
+    }
+  };
+
   useEffect(() => {
     if (isOpen) {
       setActiveThemeId(getActiveTheme());
       setSnapshots(db.getSnapshots());
+      setUnitCount(db.getUnitCount());
     }
   }, [isOpen]);
 
@@ -213,7 +236,55 @@ export const SettingsSyncModal: React.FC<SettingsSyncModalProps> = ({
           </div>
         </div>
 
-        {/* SECTION 2: BACKUPS & PROTECTION */}
+        {/* SECTION 2: PHYSICAL STORAGE CONFIGURATION */}
+        <div className="space-y-3 pt-2 border-t border-slate-800">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Boxes className="h-4 w-4 text-amber-400" />
+              <span className="text-xs font-mono uppercase text-slate-300 font-bold">
+                CHAOS CABINET CONFIGURATION:
+              </span>
+            </div>
+            <span className="text-[10px] font-mono text-slate-400">Dynamic storage</span>
+          </div>
+
+          <div className="p-3.5 rounded-2xl bg-slate-950/80 border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <div className="text-xs font-bold text-white flex items-center gap-2">
+                <span>Active Storage Units:</span>
+                <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-mono font-black text-xs border border-amber-500/40">
+                  {unitCount} Units ({unitCount * 3} Drawers)
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400 mt-0.5">
+                Each unit has 3 drawers (A = Left, B = Middle, C = Right) with unlimited batch dividers.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
+              <button
+                onClick={handleAddUnit}
+                className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold font-mono text-xs flex items-center gap-1.5 shadow transition cursor-pointer"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                <span>+ Add Unit {unitCount + 1}</span>
+              </button>
+
+              {unitCount > 1 && db.canRemoveUnit(unitCount) && (
+                <button
+                  onClick={handleRemoveLastUnit}
+                  className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-rose-950/60 text-slate-300 hover:text-rose-300 border border-slate-700 hover:border-rose-800 font-mono text-xs flex items-center gap-1 transition cursor-pointer"
+                  title={`Remove empty Unit ${unitCount}`}
+                >
+                  <Minus className="h-3 w-3" />
+                  <span>Remove Unit</span>
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* SECTION 3: BACKUPS & PROTECTION */}
         <div className="space-y-3 pt-2 border-t border-slate-800">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">

@@ -44,11 +44,13 @@ export const IngestEngine: React.FC = () => {
   // Reactive DB subscriptions
   const [instances, setInstances] = useState<CardInstance[]>(() => db.getAllInstances());
   const [history, setHistory] = useState<ActivityLogItem[]>(() => db.getHistory());
+  const [unitCount, setUnitCount] = useState<number>(() => db.getUnitCount());
 
   useEffect(() => {
     return db.subscribe(() => {
       setInstances(db.getAllInstances());
       setHistory(db.getHistory());
+      setUnitCount(db.getUnitCount());
     });
   }, []);
 
@@ -331,13 +333,13 @@ export const IngestEngine: React.FC = () => {
           {/* 3-Tier Selectors with updated Left, Middle, Right orientation */}
           <div className="grid grid-cols-3 gap-3 pt-2 border-t border-slate-800">
             <div>
-              <label className="text-[10px] font-mono text-slate-400 block mb-1">UNIT (1-9)</label>
+              <label className="text-[10px] font-mono text-slate-400 block mb-1">UNIT (1-{unitCount})</label>
               <select
                 value={unit}
                 onChange={(e) => setUnit(parseInt(e.target.value, 10))}
                 className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-xs text-white font-mono"
               >
-                {[1, 2, 3, 4, 5, 6, 7, 8, 9].map(u => <option key={u} value={u}>Unit {u}</option>)}
+                {Array.from({ length: unitCount }, (_, i) => i + 1).map(u => <option key={u} value={u}>Unit {u}</option>)}
               </select>
             </div>
 

@@ -171,12 +171,14 @@ export const SniperSearch: React.FC = () => {
   // Reactive DB subscriptions
   const [instances, setInstances] = useState<CardInstance[]>(() => db.getAllInstances());
   const [cards, setCards] = useState<ScryfallCard[]>(() => db.getAllCards());
+  const [unitCount, setUnitCount] = useState<number>(() => db.getUnitCount());
 
   useEffect(() => {
     enrichMissingCards();
     return db.subscribe(() => {
       setInstances(db.getAllInstances());
       setCards(db.getAllCards());
+      setUnitCount(db.getUnitCount());
     });
   }, []);
 
@@ -767,7 +769,7 @@ export const SniperSearch: React.FC = () => {
                   onChange={(e) => setReturnUnit(parseInt(e.target.value, 10))}
                   className="w-full bg-slate-900 border border-slate-700 rounded p-1.5 text-white"
                 >
-                  {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((u) => <option key={u} value={u}>{u}</option>)}
+                  {Array.from({ length: unitCount }, (_, i) => i + 1).map((u) => <option key={u} value={u}>{u}</option>)}
                 </select>
               </div>
 
@@ -831,7 +833,7 @@ export const SniperSearch: React.FC = () => {
                   onChange={(e) => setEditUnit(parseInt(e.target.value, 10))}
                   className="w-full bg-slate-900 border border-slate-700 rounded p-1.5 text-white"
                 >
-                  {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((u) => <option key={u} value={u}>{u}</option>)}
+                  {Array.from({ length: unitCount }, (_, i) => i + 1).map((u) => <option key={u} value={u}>{u}</option>)}
                 </select>
               </div>
 
@@ -895,7 +897,7 @@ export const SniperSearch: React.FC = () => {
                   onChange={(e) => setAddUnit(parseInt(e.target.value, 10))}
                   className="w-full bg-slate-900 border border-slate-700 rounded p-1.5 text-white"
                 >
-                  {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((u) => <option key={u} value={u}>{u}</option>)}
+                  {Array.from({ length: unitCount }, (_, i) => i + 1).map((u) => <option key={u} value={u}>{u}</option>)}
                 </select>
               </div>
 

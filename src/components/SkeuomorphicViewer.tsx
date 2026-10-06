@@ -1,9 +1,8 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { 
   Boxes, 
   MapPin, 
   ChevronLeft, 
-  Eye, 
   Layers, 
   Sparkles,
   ArrowRight,
@@ -11,17 +10,31 @@ import {
   CheckCircle2,
   Trash2,
   Search,
-  X
+  X,
+  Plus,
+  Minus,
+  Undo2
 } from 'lucide-react';
 import { CardInstance, ScryfallCard } from '../types';
-import { db } from '../services/db';
+import { db, generateUUID } from '../services/db';
 import { formatLocationId, parseLocationId } from '../services/pickPath';
 import { getScryfallImageFallback, CARD_BACK_IMAGE, enrichMissingCards } from '../services/scryfall';
 import { playSound, triggerHaptic } from '../services/audio';
 
+interface UndoAction {
+  id: string;
+  type: 'checkout' | 'remove' | 'relocate' | 'return';
+  instance: CardInstance;
+  cardName: string;
+  previousLocation: string | null;
+  previousState: 'A' | 'B';
+  message: string;
+  timestamp: number;
+}
+
 export const SkeuomorphicViewer: React.FC = () => {
   // Navigation levels:
-  // level 1: cabinet (view all 9 units x 3 drawers)
+  // level 1: cabinet (view dynamic units x 3 drawers)
   // level 2: drawer (inside open drawer, see dividers/batches)
   // level 3: batch (inside a batch, flip through cards)
   // level 4: brewing (inside diffuse decks/brewing pool)
@@ -31,14 +44,25 @@ export const SkeuomorphicViewer: React.FC = () => {
   const [isViewingBrewing, setIsViewingBrewing] = useState<boolean>(false);
   const [brewingSearchQuery, setBrewingSearchQuery] = useState<string>('');
 
+  // Dynamic storage units count
+  const [unitCount, setUnitCount] = useState<number>(() => db.getUnitCount());
+
   // Return to Chaos Drawer modal from brewing
   const [returningInstance, setReturningInstance] = useState<CardInstance | null>(null);
   const [returnUnit, setReturnUnit] = useState<number>(1);
   const [returnDrawer, setReturnDrawer] = useState<'A' | 'B' | 'C'>('A');
   const [returnBatch, setReturnBatch] = useState<number>(1);
 
-  // Card zoom preview
-  const [previewCard, setPreviewCard] = useState<CardInstance | null>(null);
+  // Relocate modal for moving card between drawer batches
+  const [relocatingInstance, setRelocatingInstance] = useState<CardInstance | null>(null);
+  const [relocateUnit, setRelocateUnit] = useState<number>(1);
+  const [relocateDrawer, setRelocateDrawer] = useState<'A' | 'B' | 'C'>('A');
+  const [relocateBatch, setRelocateBatch] = useState<number>(1);
+
+  // Undo notification state
+  const [activeUndo, setActiveUndo] = useState<UndoAction | null>(null);
+  const [undoProgress, setUndoProgress] = useState<number>(100);
+  const undoTimerRef = useRef<any>(null);
 
   // Reactive DB subscriptions
   const [instances, setInstances] = useState<CardInstance[]>(() => db.getAllInstances());
@@ -48,12 +72,21 @@ export const SkeuomorphicViewer: React.FC = () => {
     return db.subscribe(() => {
       setInstances(db.getAllInstances());
       setCards(db.getAllCards());
+      setUnitCount(db.getUnitCount());
     });
   }, []);
 
   useEffect(() => {
     enrichMissingCards();
   }, [selectedBatch, selectedDrawer, selectedUnit]);
+
+  useEffect(() => {
+    return () => {
+      if (undoTimerRef.current) {
+        clearInterval(undoTimerRef.current);
+      }
+    };
+  }, []);
 
   const cardDictionary = useMemo(() => {
     const map = new Map<string, ScryfallCard>();
@@ -67,12 +100,20 @@ export const SkeuomorphicViewer: React.FC = () => {
     return map;
   }, [cards]);
 
-  // Index cards into Units -> Drawers -> Batches
+  // Dynamic Units list
+  const unitsList = useMemo(() => {
+    const list: number[] = [];
+    for (let u = 1; u <= unitCount; u++) {
+      list.push(u);
+    }
+    return list;
+  }, [unitCount]);
+
+  // Index cards into Units -> Drawers -> Batches dynamically
   const warehouseMap = useMemo(() => {
-    // 9 units, each with A, B, C
     const data: Record<number, Record<'A' | 'B' | 'C', Map<number, CardInstance[]>>> = {};
 
-    for (let u = 1; u <= 9; u++) {
+    for (let u = 1; u <= unitCount; u++) {
       data[u] = {
         A: new Map(),
         B: new Map(),
@@ -83,7 +124,16 @@ export const SkeuomorphicViewer: React.FC = () => {
     for (const inst of instances) {
       if (inst.state !== 'A' || !inst.location_id) continue;
       const coord = parseLocationId(inst.location_id);
-      if (!coord.valid || coord.unit < 1 || coord.unit > 9) continue;
+      if (!coord.valid || coord.unit < 1) continue;
+
+      // Auto-expand dynamic map if any instance is stored in a higher unit
+      if (!data[coord.unit]) {
+        data[coord.unit] = {
+          A: new Map(),
+          B: new Map(),
+          C: new Map()
+        };
+      }
 
       const unitDrawers = data[coord.unit];
       if (unitDrawers && unitDrawers[coord.drawer]) {
@@ -96,7 +146,7 @@ export const SkeuomorphicViewer: React.FC = () => {
     }
 
     return data;
-  }, [instances]);
+  }, [instances, unitCount]);
 
   // Cards currently in Active Decks & Brewing pool (State B)
   const brewingCards = useMemo(() => {
@@ -116,7 +166,85 @@ export const SkeuomorphicViewer: React.FC = () => {
     return brewingCards.filter(inst => inst.card_name.toLowerCase().includes(q));
   }, [brewingCards, brewingSearchQuery]);
 
-  // Open Drawer action
+  // Trigger an undoable action with countdown progress bar
+  const triggerUndoableAction = (
+    type: 'checkout' | 'remove' | 'relocate' | 'return',
+    inst: CardInstance,
+    execute: () => void,
+    message: string
+  ) => {
+    const snapshot: CardInstance = { ...inst };
+    execute();
+
+    if (undoTimerRef.current) {
+      clearInterval(undoTimerRef.current);
+      undoTimerRef.current = null;
+    }
+
+    const action: UndoAction = {
+      id: generateUUID(),
+      type,
+      instance: snapshot,
+      cardName: inst.card_name,
+      previousLocation: inst.location_id,
+      previousState: inst.state,
+      message,
+      timestamp: Date.now()
+    };
+
+    setActiveUndo(action);
+    setUndoProgress(100);
+
+    const duration = 8000;
+    const interval = 100;
+    const decrement = (interval / duration) * 100;
+
+    undoTimerRef.current = setInterval(() => {
+      setUndoProgress((prev) => {
+        if (prev <= decrement) {
+          clearInterval(undoTimerRef.current);
+          undoTimerRef.current = null;
+          setActiveUndo(null);
+          return 0;
+        }
+        return prev - decrement;
+      });
+    }, interval);
+  };
+
+  // Perform Undo reversal
+  const handleUndo = () => {
+    if (!activeUndo) return;
+    playSound('success');
+    triggerHaptic('medium');
+
+    if (undoTimerRef.current) {
+      clearInterval(undoTimerRef.current);
+      undoTimerRef.current = null;
+    }
+
+    const { type, instance, previousLocation } = activeUndo;
+
+    if (type === 'checkout') {
+      if (previousLocation) {
+        db.returnToChaos(instance.instance_id, previousLocation);
+      } else {
+        db.restoreInstance(instance);
+      }
+    } else if (type === 'remove') {
+      db.restoreInstance(instance);
+    } else if (type === 'relocate') {
+      if (previousLocation) {
+        db.updateLocation(instance.instance_id, previousLocation);
+      }
+    } else if (type === 'return') {
+      db.checkoutToDecks(instance.instance_id);
+    }
+
+    setActiveUndo(null);
+  };
+
+  // Navigation handlers
   const handleOpenDrawer = (unit: number, drawer: 'A' | 'B' | 'C') => {
     playSound('pull');
     triggerHaptic('medium');
@@ -126,7 +254,6 @@ export const SkeuomorphicViewer: React.FC = () => {
     setIsViewingBrewing(false);
   };
 
-  // Open Brewing Pool action
   const handleOpenBrewing = () => {
     playSound('pull');
     triggerHaptic('medium');
@@ -136,36 +263,12 @@ export const SkeuomorphicViewer: React.FC = () => {
     setSelectedBatch(null);
   };
 
-  // Return card to chaos drawer from brewing
-  const handleOpenReturnModal = (inst: CardInstance) => {
-    playSound('click');
-    setReturningInstance(inst);
-  };
-
-  const handleConfirmReturn = () => {
-    if (!returningInstance) return;
-    playSound('success');
-    triggerHaptic('medium');
-    const locId = formatLocationId(returnUnit, returnDrawer, returnBatch);
-    db.returnToChaos(returningInstance.instance_id, locId);
-    setReturningInstance(null);
-  };
-
-  // Remove card for trade/sale from brewing
-  const handleRemoveForTrade = (inst: CardInstance) => {
-    playSound('pull');
-    triggerHaptic('medium');
-    db.deleteInstance(inst.instance_id);
-  };
-
-  // Open Batch action
   const handleOpenBatch = (batchIndex: number) => {
     playSound('click');
     triggerHaptic('light');
     setSelectedBatch(batchIndex);
   };
 
-  // Back actions
   const handleBackToCabinet = () => {
     playSound('skip');
     setSelectedUnit(null);
@@ -179,11 +282,97 @@ export const SkeuomorphicViewer: React.FC = () => {
     setSelectedBatch(null);
   };
 
-  // Checkout directly from viewer
+  // Dynamic unit management
+  const handleAddUnit = () => {
+    playSound('success');
+    triggerHaptic('medium');
+    const newCount = db.addUnit();
+    setUnitCount(newCount);
+  };
+
+  const handleRemoveLastUnit = () => {
+    if (db.canRemoveUnit(unitCount)) {
+      if (window.confirm(`Remove empty Unit ${unitCount}?`)) {
+        playSound('click');
+        triggerHaptic('light');
+        db.removeLastUnit();
+        setUnitCount(db.getUnitCount());
+      }
+    }
+  };
+
+  // Card Routing Action 1: Check out to Decks / Brewing
   const handleCheckoutCard = (inst: CardInstance) => {
     playSound('pull');
     triggerHaptic('medium');
-    db.checkoutToDecks(inst.instance_id);
+    const loc = inst.location_id || 'Drawer';
+    triggerUndoableAction(
+      'checkout',
+      inst,
+      () => db.checkoutToDecks(inst.instance_id),
+      `Checked out "${inst.card_name}" from ${loc} to Decks/Brewing`
+    );
+  };
+
+  // Card Routing Action 2: Remove entirely (Sold / Traded away)
+  const handleRemoveCard = (inst: CardInstance) => {
+    playSound('pull');
+    triggerHaptic('medium');
+    const loc = inst.location_id || (inst.state === 'B' ? 'Brewing' : 'Drawer');
+    triggerUndoableAction(
+      'remove',
+      inst,
+      () => db.deleteInstance(inst.instance_id),
+      `Removed "${inst.card_name}" from ${loc} (Sold / Traded)`
+    );
+  };
+
+  // Card Routing Action 3: Relocate to another Drawer Batch
+  const handleOpenRelocateModal = (inst: CardInstance) => {
+    playSound('click');
+    const parsed = parseLocationId(inst.location_id);
+    setRelocateUnit(parsed.valid ? parsed.unit : (selectedUnit || 1));
+    setRelocateDrawer(parsed.valid ? parsed.drawer : (selectedDrawer || 'A'));
+    setRelocateBatch(parsed.valid ? parsed.batch_index : (selectedBatch || 1));
+    setRelocatingInstance(inst);
+  };
+
+  const handleConfirmRelocate = () => {
+    if (!relocatingInstance) return;
+    playSound('success');
+    triggerHaptic('medium');
+    const newLoc = formatLocationId(relocateUnit, relocateDrawer, relocateBatch);
+    const oldLoc = relocatingInstance.location_id || 'unassigned';
+    triggerUndoableAction(
+      'relocate',
+      relocatingInstance,
+      () => db.updateLocation(relocatingInstance.instance_id, newLoc),
+      `Relocated "${relocatingInstance.card_name}" from ${oldLoc} to ${newLoc}`
+    );
+    setRelocatingInstance(null);
+  };
+
+  // Brewing Return modal actions
+  const handleOpenReturnModal = (inst: CardInstance) => {
+    playSound('click');
+    setReturningInstance(inst);
+    setReturnUnit(1);
+    setReturnDrawer('A');
+    setReturnBatch(1);
+  };
+
+  const handleConfirmReturn = () => {
+    if (!returningInstance) return;
+    playSound('success');
+    triggerHaptic('medium');
+    const locId = formatLocationId(returnUnit, returnDrawer, returnBatch);
+    triggerUndoableAction(
+      'return',
+      returningInstance,
+      () => db.returnToChaos(returningInstance.instance_id, locId),
+      `Returned "${returningInstance.card_name}" to Chaos drawer ${locId}`
+    );
+    setReturningInstance(null);
   };
 
   // Active batches inside selected drawer
@@ -200,26 +389,38 @@ export const SkeuomorphicViewer: React.FC = () => {
     return warehouseMap[selectedUnit]?.[selectedDrawer]?.get(selectedBatch) || [];
   }, [selectedUnit, selectedDrawer, selectedBatch, warehouseMap]);
 
+  const currentBatchCoordinate = selectedUnit && selectedDrawer && selectedBatch !== null 
+    ? formatLocationId(selectedUnit, selectedDrawer, selectedBatch) 
+    : null;
+
   return (
-    <div className="max-w-4xl mx-auto px-4 sm:px-6 py-6 space-y-6">
+    <div className="max-w-4xl mx-auto px-4 sm:px-6 py-6 space-y-6 relative">
       {/* LEVEL 1: SKEUOMORPHIC CABINET VIEW */}
       {selectedUnit === null && !isViewingBrewing && (
         <div className="space-y-4">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <div>
               <h1 className="text-lg font-bold text-white flex items-center gap-2">
                 <Boxes className="h-5 w-5 text-amber-400" />
-                Physical Chaos Cabinet (9 Units × 3 Drawers)
+                Physical Chaos Cabinet ({unitsList.length} Units × 3 Drawers)
               </h1>
               <p className="text-xs text-slate-400 mt-0.5">
                 Click any physical drawer to slide it open and browse batch dividers.
               </p>
             </div>
+
+            <button
+              onClick={handleAddUnit}
+              className="self-start sm:self-auto px-3 py-1.5 rounded-xl bg-gradient-to-r from-amber-600/30 to-amber-700/30 hover:from-amber-600/40 hover:to-amber-500/40 border border-amber-500/50 hover:border-amber-400 text-amber-300 font-mono text-xs font-bold flex items-center gap-1.5 shadow-md transition cursor-pointer"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              <span>+ Add Unit {unitCount + 1}</span>
+            </button>
           </div>
 
-          {/* Realistic Cabinet Frame */}
+          {/* Realistic Cabinet Frame with Dynamic Storage Units */}
           <div className="bg-gradient-to-b from-stone-900 via-neutral-900 to-stone-950 p-4 sm:p-6 rounded-3xl border-4 border-stone-800 shadow-2xl space-y-3">
-            {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((u) => {
+            {unitsList.map((u) => {
               const uDrawers = warehouseMap[u];
 
               return (
@@ -269,7 +470,29 @@ export const SkeuomorphicViewer: React.FC = () => {
               );
             })}
 
-            {/* SKEUOMORPHIC DECKS & BREWING SHELF (BELOW ALL 9 CHAOS UNITS) */}
+            {/* Cabinet Expansion & Management Controls */}
+            <div className="flex items-center justify-between pt-2 px-1 border-t border-stone-800/60 mt-3">
+              <button
+                onClick={handleAddUnit}
+                className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-amber-600/20 to-amber-800/30 hover:from-amber-600/30 hover:to-amber-700/40 border border-amber-500/40 hover:border-amber-400 text-amber-300 font-mono text-xs font-bold flex items-center gap-2 shadow transition cursor-pointer"
+              >
+                <Plus className="h-4 w-4" />
+                <span>Add Storage Unit {unitCount + 1}</span>
+              </button>
+
+              {unitCount > 1 && db.canRemoveUnit(unitCount) && (
+                <button
+                  onClick={handleRemoveLastUnit}
+                  className="px-3 py-1.5 rounded-xl bg-stone-900/80 hover:bg-rose-950/40 border border-stone-800 hover:border-rose-700/50 text-stone-400 hover:text-rose-300 font-mono text-[11px] flex items-center gap-1.5 transition cursor-pointer"
+                  title={`Remove empty Unit ${unitCount}`}
+                >
+                  <Minus className="h-3.5 w-3.5" />
+                  <span>Remove Unit {unitCount}</span>
+                </button>
+              )}
+            </div>
+
+            {/* SKEUOMORPHIC DECKS & BREWING SHELF (BELOW ALL CHAOS UNITS) */}
             <div className="pt-4 border-t-2 border-stone-800/90 mt-2">
               <div className="flex items-center justify-between px-1 text-[10px] font-mono font-bold text-blue-400 uppercase tracking-widest mb-1.5">
                 <span>DIFFUSE DECKS & BREWING COMPARTMENT</span>
@@ -326,7 +549,7 @@ export const SkeuomorphicViewer: React.FC = () => {
           <div className="flex items-center justify-between">
             <button
               onClick={handleBackToCabinet}
-              className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-mono text-slate-200 flex items-center gap-1.5 shadow"
+              className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-mono text-slate-200 flex items-center gap-1.5 shadow cursor-pointer"
             >
               <ChevronLeft className="h-4 w-4" />
               <span>Back to Cabinet</span>
@@ -397,13 +620,13 @@ export const SkeuomorphicViewer: React.FC = () => {
         </div>
       )}
 
-      {/* LEVEL 3: INSIDE BATCH (Card Images Gallery) */}
+      {/* LEVEL 3: INSIDE BATCH (Card Images Gallery & Actions) */}
       {selectedUnit !== null && selectedDrawer !== null && selectedBatch !== null && (
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <button
               onClick={handleBackToDrawer}
-              className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-mono text-slate-200 flex items-center gap-1.5 shadow"
+              className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-mono text-slate-200 flex items-center gap-1.5 shadow cursor-pointer"
             >
               <ChevronLeft className="h-4 w-4" />
               <span>Back to Drawer {selectedUnit}.{selectedDrawer}</span>
@@ -414,57 +637,107 @@ export const SkeuomorphicViewer: React.FC = () => {
                 INSPECTING BATCH:
               </span>
               <span className="text-lg font-black text-amber-400 font-mono-coordinate">
-                {selectedUnit}.{selectedDrawer}.{String(selectedBatch).padStart(2, '0')} ({activeCardsInBatch.length} Cards)
+                {currentBatchCoordinate} ({activeCardsInBatch.length} Cards)
               </span>
             </div>
           </div>
 
           {/* Cards Gallery */}
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-2xl">
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
-              {activeCardsInBatch.map((inst) => {
-                const meta = cardDictionary.get(inst.card_name.toLowerCase()) || cardDictionary.get(inst.oracle_id) || db.getCard(inst.card_name);
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-2xl space-y-4">
+            {/* Inline batch-level undo banner if an action was just performed in this batch */}
+            {activeUndo && activeUndo.previousLocation === currentBatchCoordinate && (
+              <div className="p-3 rounded-2xl bg-amber-500/10 border-2 border-amber-500/40 flex items-center justify-between gap-3 text-xs animate-in fade-in">
+                <div className="flex items-center gap-2 text-amber-300 min-w-0">
+                  <RotateCcw className="h-4 w-4 shrink-0 text-amber-400" />
+                  <span className="truncate">{activeUndo.message}</span>
+                </div>
+                <button
+                  onClick={handleUndo}
+                  className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold font-mono text-xs flex items-center gap-1 shadow cursor-pointer shrink-0"
+                >
+                  <Undo2 className="h-3.5 w-3.5" />
+                  <span>UNDO ↺</span>
+                </button>
+              </div>
+            )}
 
-                return (
-                  <div
-                    key={inst.instance_id}
-                    className="bg-slate-950 border border-slate-800 rounded-2xl overflow-hidden shadow-lg hover:border-amber-500/60 transition flex flex-col justify-between"
-                  >
-                    {/* Card Image */}
-                    <div className="relative aspect-[5/7] bg-black overflow-hidden group">
-                      <img
-                        src={meta?.image_url_normal || getScryfallImageFallback(inst.card_name)}
-                        alt={inst.card_name}
-                        loading="lazy"
-                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
-                        onError={(e) => {
-                          e.currentTarget.src = CARD_BACK_IMAGE;
-                        }}
-                      />
+            {activeCardsInBatch.length === 0 ? (
+              <div className="p-12 text-center text-slate-500 text-xs italic">
+                This batch currently contains no cards.
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+                {activeCardsInBatch.map((inst) => {
+                  const meta = cardDictionary.get(inst.card_name.toLowerCase()) || cardDictionary.get(inst.oracle_id) || db.getCard(inst.card_name);
 
-                      <div className="absolute bottom-1 right-1 bg-slate-950/90 text-emerald-400 font-mono font-bold text-[10px] px-1.5 py-0.5 rounded border border-emerald-900/50">
-                        €{meta?.price_eur ? meta.price_eur.toFixed(2) : '0.00'}
+                  return (
+                    <div
+                      key={inst.instance_id}
+                      className="bg-slate-950 border border-slate-800 rounded-2xl overflow-hidden shadow-lg hover:border-amber-500/60 transition flex flex-col justify-between"
+                    >
+                      {/* Card Image */}
+                      <div className="relative aspect-[5/7] bg-black overflow-hidden group">
+                        <img
+                          src={meta?.image_url_normal || getScryfallImageFallback(inst.card_name)}
+                          alt={inst.card_name}
+                          loading="lazy"
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                          onError={(e) => {
+                            e.currentTarget.src = CARD_BACK_IMAGE;
+                          }}
+                        />
+
+                        <div className="absolute bottom-1 right-1 bg-slate-950/90 text-emerald-400 font-mono font-bold text-[10px] px-1.5 py-0.5 rounded border border-emerald-900/50">
+                          €{meta?.price_eur ? meta.price_eur.toFixed(2) : '0.00'}
+                        </div>
+                      </div>
+
+                      {/* Card Info & Routing Actions */}
+                      <div className="p-2.5 space-y-2">
+                        <div className="text-xs font-bold text-white truncate" title={inst.card_name}>
+                          {inst.card_name}
+                        </div>
+
+                        {/* Routing Actions */}
+                        <div className="space-y-1.5">
+                          {/* 1. Move to Decks / Brewing (Check Out) */}
+                          <button
+                            onClick={() => handleCheckoutCard(inst)}
+                            className="w-full py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white font-mono font-bold text-[11px] flex items-center justify-center gap-1.5 shadow cursor-pointer transition"
+                            title="Check out to Active Decks & Brewing pool"
+                          >
+                            <Layers className="h-3.5 w-3.5" />
+                            <span>To Decks / Brewing</span>
+                          </button>
+
+                          <div className="grid grid-cols-2 gap-1.5">
+                            {/* 2. Relocate to another Drawer Batch */}
+                            <button
+                              onClick={() => handleOpenRelocateModal(inst)}
+                              className="py-1 px-2 rounded-lg bg-slate-800 hover:bg-slate-750 text-slate-300 hover:text-white border border-slate-700 font-mono text-[10px] font-bold flex items-center justify-center gap-1 transition cursor-pointer"
+                              title="Relocate to another drawer batch"
+                            >
+                              <MapPin className="h-3 w-3 text-amber-400" />
+                              <span>Relocate</span>
+                            </button>
+
+                            {/* 3. Remove entirely (Sold / Traded) */}
+                            <button
+                              onClick={() => handleRemoveCard(inst)}
+                              className="py-1 px-2 rounded-lg bg-slate-800 hover:bg-rose-950/70 text-slate-300 hover:text-rose-300 border border-slate-700 hover:border-rose-800 font-mono text-[10px] font-bold flex items-center justify-center gap-1 transition cursor-pointer"
+                              title="Remove entirely from collection (Sold / Traded)"
+                            >
+                              <Trash2 className="h-3 w-3 text-rose-400" />
+                              <span>Remove</span>
+                            </button>
+                          </div>
+                        </div>
                       </div>
                     </div>
-
-                    {/* Card Info & Quick Pull Button */}
-                    <div className="p-2.5 space-y-1.5">
-                      <div className="text-xs font-bold text-white truncate" title={inst.card_name}>
-                        {inst.card_name}
-                      </div>
-
-                      <button
-                        onClick={() => handleCheckoutCard(inst)}
-                        className="w-full py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-mono font-bold text-[11px] flex items-center justify-center gap-1 shadow cursor-pointer"
-                      >
-                        <ArrowRight className="h-3 w-3" />
-                        <span>Check Out</span>
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -560,7 +833,7 @@ export const SkeuomorphicViewer: React.FC = () => {
 
                           {/* Trade / Sell */}
                           <button
-                            onClick={() => handleRemoveForTrade(inst)}
+                            onClick={() => handleRemoveCard(inst)}
                             className="p-1.5 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-slate-800 transition cursor-pointer"
                             title="Remove from collection (Trade / Sell)"
                           >
@@ -594,7 +867,7 @@ export const SkeuomorphicViewer: React.FC = () => {
                   onChange={(e) => setReturnUnit(parseInt(e.target.value, 10))}
                   className="w-full bg-slate-900 border border-slate-700 rounded p-1.5 text-white"
                 >
-                  {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((u) => <option key={u} value={u}>{u}</option>)}
+                  {unitsList.map((u) => <option key={u} value={u}>Unit {u}</option>)}
                 </select>
               </div>
 
@@ -626,16 +899,127 @@ export const SkeuomorphicViewer: React.FC = () => {
             <div className="flex justify-end gap-2 text-xs font-mono">
               <button
                 onClick={() => setReturningInstance(null)}
-                className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300"
+                className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 cursor-pointer"
               >
                 Cancel
               </button>
               <button
                 onClick={handleConfirmReturn}
-                className="px-4 py-1.5 rounded-lg bg-theme-primary font-bold shadow"
+                className="px-4 py-1.5 rounded-lg bg-theme-primary font-bold shadow cursor-pointer"
               >
                 Confirm Return
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: Relocate Card to another Drawer Batch */}
+      {relocatingInstance && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-sm w-full p-5 space-y-4 shadow-2xl">
+            <h3 className="text-base font-bold text-white flex items-center gap-2">
+              <MapPin className="h-4 w-4 text-amber-400" />
+              <span>Relocate {relocatingInstance.card_name}</span>
+            </h3>
+            <p className="text-xs text-stone-400">
+              Select a target physical batch to move this copy into:
+            </p>
+
+            <div className="grid grid-cols-3 gap-2 bg-slate-950 p-3 rounded-xl border border-slate-800 text-xs font-mono">
+              <div>
+                <label className="text-[10px] text-slate-400 block mb-1">UNIT</label>
+                <select
+                  value={relocateUnit}
+                  onChange={(e) => setRelocateUnit(parseInt(e.target.value, 10))}
+                  className="w-full bg-slate-900 border border-slate-700 rounded p-1.5 text-white"
+                >
+                  {unitsList.map((u) => <option key={u} value={u}>Unit {u}</option>)}
+                </select>
+              </div>
+
+              <div>
+                <label className="text-[10px] text-slate-400 block mb-1">DRAWER</label>
+                <select
+                  value={relocateDrawer}
+                  onChange={(e) => setRelocateDrawer(e.target.value as any)}
+                  className="w-full bg-slate-900 border border-slate-700 rounded p-1.5 text-white"
+                >
+                  <option value="A">A (Left)</option>
+                  <option value="B">B (Middle)</option>
+                  <option value="C">C (Right)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-[10px] text-slate-400 block mb-1">BATCH</label>
+                <input
+                  type="number"
+                  min={1}
+                  value={relocateBatch}
+                  onChange={(e) => setRelocateBatch(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                  className="w-full bg-slate-900 border border-slate-700 rounded p-1.5 text-white"
+                />
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 text-xs font-mono">
+              <button
+                onClick={() => setRelocatingInstance(null)}
+                className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmRelocate}
+                className="px-4 py-1.5 rounded-lg bg-theme-primary font-bold shadow cursor-pointer"
+              >
+                Relocate Card
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* FLOATING UNDO TOAST NOTIFICATION */}
+      {activeUndo && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 w-full max-w-lg px-4 pointer-events-auto animate-in slide-in-from-bottom duration-200">
+          <div className="bg-gradient-to-r from-stone-900 via-neutral-900 to-stone-900 border-2 border-amber-500/80 rounded-2xl shadow-2xl p-3.5 flex flex-col gap-2.5 text-xs text-white">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="p-1.5 rounded-lg bg-amber-500/20 text-amber-400 shrink-0">
+                  <RotateCcw className="h-4 w-4" />
+                </div>
+                <div className="min-w-0">
+                  <p className="font-medium text-stone-200 truncate font-mono text-[11px]">
+                    {activeUndo.message}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  onClick={handleUndo}
+                  className="px-3.5 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 active:bg-amber-600 text-stone-950 font-black font-mono text-xs flex items-center gap-1.5 shadow-lg cursor-pointer transition transform active:scale-95"
+                >
+                  <Undo2 className="h-3.5 w-3.5" />
+                  <span>UNDO ↺</span>
+                </button>
+                <button
+                  onClick={() => setActiveUndo(null)}
+                  className="p-1.5 rounded-lg text-stone-400 hover:text-stone-200 hover:bg-stone-800 transition cursor-pointer"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Countdown progress bar */}
+            <div className="w-full bg-stone-800 rounded-full h-1 overflow-hidden">
+              <div 
+                className="bg-amber-400 h-full transition-all duration-100 ease-linear"
+                style={{ width: `${undoProgress}%` }}
+              />
             </div>
           </div>
         </div>
