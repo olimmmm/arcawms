@@ -34,10 +34,26 @@ export type SortOption =
   | 'name_desc'
   | 'cmc_asc'
   | 'cmc_desc'
+  | 'quantity_desc'
+  | 'quantity_asc'
   | 'color_identity'
   | 'price_desc'
   | 'price_asc'
-  | 'type';
+  | 'type'
+  | 'none';
+
+export const SORT_OPTIONS: { value: SortOption; label: string }[] = [
+  { value: 'name_asc', label: 'Name (A → Z)' },
+  { value: 'name_desc', label: 'Name (Z → A)' },
+  { value: 'cmc_asc', label: 'Mana Value (Low → High)' },
+  { value: 'cmc_desc', label: 'Mana Value (High → Low)' },
+  { value: 'quantity_desc', label: 'Quantity (High → Low)' },
+  { value: 'quantity_asc', label: 'Quantity (Low → High)' },
+  { value: 'color_identity', label: 'Colour Identity (WUBRG)' },
+  { value: 'price_desc', label: 'Price (High → Low)' },
+  { value: 'price_asc', label: 'Price (Low → High)' },
+  { value: 'type', label: 'Primary Card Type' },
+];
 
 const WUBRG_ORDER: Record<string, number> = { W: 1, U: 2, B: 3, R: 4, G: 5 };
 
@@ -61,42 +77,62 @@ function getPrimaryTypeSortRank(typeLine?: string): number {
   return 9;
 }
 
-export function sortCards(cards: ScryfallCard[], sortOption: SortOption): ScryfallCard[] {
-  return [...cards].sort((a, b) => {
-    switch (sortOption) {
-      case 'name_asc':
-        return a.name.localeCompare(b.name);
-      case 'name_desc':
-        return b.name.localeCompare(a.name);
-      case 'cmc_asc': {
-        const diff = (a.cmc ?? 0) - (b.cmc ?? 0);
-        return diff !== 0 ? diff : a.name.localeCompare(b.name);
-      }
-      case 'cmc_desc': {
-        const diff = (b.cmc ?? 0) - (a.cmc ?? 0);
-        return diff !== 0 ? diff : a.name.localeCompare(b.name);
-      }
-      case 'price_desc': {
-        const diff = (b.price_eur ?? 0) - (a.price_eur ?? 0);
-        return diff !== 0 ? diff : a.name.localeCompare(b.name);
-      }
-      case 'price_asc': {
-        const diff = (a.price_eur ?? 0) - (b.price_eur ?? 0);
-        return diff !== 0 ? diff : a.name.localeCompare(b.name);
-      }
-      case 'color_identity': {
-        const keyA = getColorIdentitySortKey(a.color_identity);
-        const keyB = getColorIdentitySortKey(b.color_identity);
-        const diff = keyA.localeCompare(keyB);
-        return diff !== 0 ? diff : a.name.localeCompare(b.name);
-      }
-      case 'type': {
-        const diff = getPrimaryTypeSortRank(a.type_line) - getPrimaryTypeSortRank(b.type_line);
-        return diff !== 0 ? diff : a.name.localeCompare(b.name);
-      }
-      default:
-        return a.name.localeCompare(b.name);
+function compareByOption(
+  a: ScryfallCard,
+  b: ScryfallCard,
+  option: SortOption,
+  quantityMap?: Map<string, number>
+): number {
+  switch (option) {
+    case 'name_asc':
+      return a.name.localeCompare(b.name);
+    case 'name_desc':
+      return b.name.localeCompare(a.name);
+    case 'cmc_asc':
+      return (a.cmc ?? 0) - (b.cmc ?? 0);
+    case 'cmc_desc':
+      return (b.cmc ?? 0) - (a.cmc ?? 0);
+    case 'quantity_desc': {
+      const qA = quantityMap ? (quantityMap.get(a.oracle_id) ?? quantityMap.get(a.name.trim().toLowerCase()) ?? 0) : 0;
+      const qB = quantityMap ? (quantityMap.get(b.oracle_id) ?? quantityMap.get(b.name.trim().toLowerCase()) ?? 0) : 0;
+      return qB - qA;
     }
+    case 'quantity_asc': {
+      const qA = quantityMap ? (quantityMap.get(a.oracle_id) ?? quantityMap.get(a.name.trim().toLowerCase()) ?? 0) : 0;
+      const qB = quantityMap ? (quantityMap.get(b.oracle_id) ?? quantityMap.get(b.name.trim().toLowerCase()) ?? 0) : 0;
+      return qA - qB;
+    }
+    case 'price_desc':
+      return (b.price_eur ?? 0) - (a.price_eur ?? 0);
+    case 'price_asc':
+      return (a.price_eur ?? 0) - (b.price_eur ?? 0);
+    case 'color_identity': {
+      const keyA = getColorIdentitySortKey(a.color_identity);
+      const keyB = getColorIdentitySortKey(b.color_identity);
+      return keyA.localeCompare(keyB);
+    }
+    case 'type':
+      return getPrimaryTypeSortRank(a.type_line) - getPrimaryTypeSortRank(b.type_line);
+    case 'none':
+    default:
+      return 0;
+  }
+}
+
+export function sortCards(
+  cards: ScryfallCard[],
+  primarySort: SortOption = 'name_asc',
+  secondarySort: SortOption = 'none',
+  quantityMap?: Map<string, number>
+): ScryfallCard[] {
+  return [...cards].sort((a, b) => {
+    let diff = compareByOption(a, b, primarySort, quantityMap);
+    if (diff !== 0) return diff;
+    if (secondarySort && secondarySort !== 'none' && secondarySort !== primarySort) {
+      diff = compareByOption(a, b, secondarySort, quantityMap);
+      if (diff !== 0) return diff;
+    }
+    return a.name.localeCompare(b.name);
   });
 }
 
@@ -106,8 +142,13 @@ export const SniperSearch: React.FC = () => {
   const [globalResults, setGlobalResults] = useState<ScryfallCard[]>([]);
   const [isSearchingGlobal, setIsSearchingGlobal] = useState(false);
   const [suggestions, setSuggestions] = useState<string[]>([]);
-  const [sortOption, setSortOption] = useState<SortOption>(() => {
-    return (localStorage.getItem('arcawms_search_sort') as SortOption) || 'name_asc';
+  const [primarySort, setPrimarySort] = useState<SortOption>(() => {
+    return (localStorage.getItem('arcawms_search_sort_primary') as SortOption) ||
+      (localStorage.getItem('arcawms_search_sort') as SortOption) ||
+      'name_asc';
+  });
+  const [secondarySort, setSecondarySort] = useState<SortOption>(() => {
+    return (localStorage.getItem('arcawms_search_sort_secondary') as SortOption) || 'cmc_asc';
   });
 
   // Session state to support on-page UNDO for cards moved or removed on this page (persists across refresh)
@@ -263,15 +304,38 @@ export const SniperSearch: React.FC = () => {
     setIsSearchingGlobal(false);
   };
 
-  const handleSortChange = (newSort: SortOption) => {
-    setSortOption(newSort);
+  const handlePrimarySortChange = (newSort: SortOption) => {
+    setPrimarySort(newSort);
+    localStorage.setItem('arcawms_search_sort_primary', newSort);
     localStorage.setItem('arcawms_search_sort', newSort);
     playSound('click');
   };
 
+  const handleSecondarySortChange = (newSort: SortOption) => {
+    setSecondarySort(newSort);
+    localStorage.setItem('arcawms_search_sort_secondary', newSort);
+    playSound('click');
+  };
+
+  // Quantity map for fast and accurate quantity-based sorting across chaos and decks
+  const cardQuantityMap = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const card of cards) {
+      const cleanName = card.name.trim().toLowerCase();
+      const rawInstances = [
+        ...(instancesByOracleId.get(card.oracle_id) || []),
+        ...(instancesByOracleId.get(cleanName) || [])
+      ];
+      const count = new Set(rawInstances.map(i => i.instance_id)).size;
+      map.set(card.oracle_id, count);
+      map.set(cleanName, count);
+    }
+    return map;
+  }, [cards, instancesByOracleId]);
+
   const sortedCards = useMemo(() => {
-    return sortCards(filteredCards, sortOption);
-  }, [filteredCards, sortOption]);
+    return sortCards(filteredCards, primarySort, secondarySort, cardQuantityMap);
+  }, [filteredCards, primarySort, secondarySort, cardQuantityMap]);
 
   const addSyntaxPill = (filterText: string) => {
     playSound('click');
@@ -431,7 +495,7 @@ export const SniperSearch: React.FC = () => {
                   setSuggestions([]);
                 }
               }}
-              placeholder='Search card name or Scryfall syntax (e.g. cmc:3, t:creature, id:w)...'
+              placeholder='Search card name or Scryfall syntax (e.g. cmc<=2, p<=5, id<=wu, otag:removal)...'
               className="w-full bg-slate-900 border border-slate-700/80 rounded-2xl pl-12 pr-10 py-3.5 text-base text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-amber-500 shadow-lg font-sans"
               autoFocus
             />
@@ -468,11 +532,12 @@ export const SniperSearch: React.FC = () => {
             <span className="text-slate-500 text-[11px] mr-1">QUICK FILTERS:</span>
             <button onClick={() => addSyntaxPill('cmc:1')} className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700">cmc:1</button>
             <button onClick={() => addSyntaxPill('cmc:2')} className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700">cmc:2</button>
-            <button onClick={() => addSyntaxPill('cmc:3')} className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700">cmc:3</button>
             <button onClick={() => addSyntaxPill('cmc<=2')} className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700">cmc&lt;=2</button>
+            <button onClick={() => addSyntaxPill('p<=2')} className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700">p&lt;=2</button>
             <button onClick={() => addSyntaxPill('t:creature')} className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700">t:creature</button>
             <button onClick={() => addSyntaxPill('c:u')} className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700">c:u</button>
-            <button onClick={() => addSyntaxPill('id:w')} className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700">id:w</button>
+            <button onClick={() => addSyntaxPill('id<=wu')} className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700">id&lt;=wu</button>
+            <button onClick={() => addSyntaxPill('otag:removal')} className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700">otag:removal</button>
             <button onClick={() => addSyntaxPill('o:"draw"')} className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700">o:draw</button>
           </div>
 
@@ -512,23 +577,40 @@ export const SniperSearch: React.FC = () => {
           )}
         </div>
 
-        <div className="flex items-center gap-2 text-xs font-mono">
-          <ArrowUpDown className="h-3.5 w-3.5 text-slate-400" />
-          <span className="text-slate-400 hidden sm:inline">Sort:</span>
-          <select
-            value={sortOption}
-            onChange={(e) => handleSortChange(e.target.value as SortOption)}
-            className="bg-slate-900 border border-slate-700 hover:border-slate-600 text-slate-200 text-xs rounded-xl px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-amber-500 font-sans cursor-pointer transition shadow"
-          >
-            <option value="name_asc">Name (A → Z)</option>
-            <option value="name_desc">Name (Z → A)</option>
-            <option value="cmc_asc">Mana Value (Low → High)</option>
-            <option value="cmc_desc">Mana Value (High → Low)</option>
-            <option value="color_identity">Colour Identity (WUBRG)</option>
-            <option value="price_desc">Price (High → Low)</option>
-            <option value="price_asc">Price (Low → High)</option>
-            <option value="type">Primary Card Type</option>
-          </select>
+        <div className="flex flex-wrap items-center gap-2 text-xs font-mono">
+          <div className="flex items-center gap-1.5">
+            <ArrowUpDown className="h-3.5 w-3.5 text-amber-400" />
+            <span className="text-slate-400 font-bold">Sort:</span>
+            <select
+              value={primarySort}
+              onChange={(e) => handlePrimarySortChange(e.target.value as SortOption)}
+              aria-label="Primary Sort"
+              className="bg-slate-900 border border-slate-700 hover:border-slate-600 text-slate-200 text-xs rounded-xl px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-amber-500 font-sans cursor-pointer transition shadow"
+            >
+              {SORT_OPTIONS.map(opt => (
+                <option key={`prim-${opt.value}`} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            <span className="text-slate-500 text-[11px]">then</span>
+            <select
+              value={secondarySort}
+              onChange={(e) => handleSecondarySortChange(e.target.value as SortOption)}
+              aria-label="Secondary Sort"
+              className="bg-slate-900 border border-slate-700 hover:border-slate-600 text-slate-300 text-xs rounded-xl px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-amber-500 font-sans cursor-pointer transition shadow"
+            >
+              <option value="none">None</option>
+              {SORT_OPTIONS.map(opt => (
+                <option key={`sec-${opt.value}`} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
       </div>
 

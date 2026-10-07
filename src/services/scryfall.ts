@@ -349,9 +349,11 @@ interface SyntaxToken {
  * Robust Scryfall Syntax Parser supporting:
  * - cmc:3, cmc=3, cmc<=2, cmc>=4, cmc<2, cmc>3, cmc!=3
  * - mv:3 (alias for cmc)
+ * - p:5, p<=2, p>10, price:3 (EUR market price comparisons)
+ * - otag:removal, otag:threaten (Scryfall functional tags)
  * - t:creature, type:instant
- * - c:u, c:rg, c:colorless
- * - id:wubrg, ci:esper
+ * - c:u, c<=wu, c>=r, c=wu (Color comparisons with MTG set logic)
+ * - id:w, id<=wu, id>=esper, id=wu (Commander Identity comparisons)
  * - o:"draw a card"
  * - r:rare, r:mythic
  * - Plain words & negation -t:land
@@ -363,15 +365,31 @@ export function parseSyntaxQuery(query: string): SyntaxToken[][] {
   for (const group of orParts) {
     const tokens: SyntaxToken[] = [];
     // Match field:value, field<=value, or "quoted phrases"
-    const regex = /(-?)([a-zA-Z]+)([:=><!]=?|!=)(".*?"|'.*?'|\S+)|(".*?"|'.*?'|\S+)/g;
+    // Operators supported: <=, >=, =<, =>, !=, ==, <, >, =, :
+    const regex = /(-?)([a-zA-Z_-]+)(<=|>=|=<|=>|!=|==|<|>|=|:)(".*?"|'.*?'|\S+)|(".*?"|'.*?'|\S+)/g;
     let match;
 
     while ((match = regex.exec(group)) !== null) {
       if (match[2]) {
         const negated = match[1] === '-';
         const field = match[2].toLowerCase();
-        const op = match[3];
+        let op = match[3];
         let val = match[4].replace(/^["']|["']$/g, '');
+
+        // If op was ':' but val starts with an operator (e.g. id:<=wu or p:>=5)
+        if (op === ':') {
+          const nestedOp = val.match(/^(<=|>=|=<|=>|!=|==|<|>|=)(.*)$/);
+          if (nestedOp) {
+            op = nestedOp[1];
+            val = nestedOp[2].trim().replace(/^["']|["']$/g, '');
+          }
+        }
+
+        // Normalize operators
+        if (op === '=<') op = '<=';
+        if (op === '=>') op = '>=';
+        if (op === '==') op = '=';
+
         tokens.push({ type: 'term', field, op, value: val, negated });
       } else if (match[5]) {
         let text = match[5].replace(/^["']|["']$/g, '');
@@ -390,6 +408,14 @@ export function parseSyntaxQuery(query: string): SyntaxToken[][] {
 }
 
 const COLOR_ALIAS_MAP: Record<string, string[]> = {
+  // Single Colors
+  white: ['W'],
+  blue: ['U'],
+  black: ['B'],
+  red: ['R'],
+  green: ['G'],
+  colorless: [],
+  c: [],
   // Guilds
   azorius: ['W', 'U'],
   dimir: ['U', 'B'],
@@ -429,10 +455,163 @@ export function parseAllowedColors(val: string): { isColorless: boolean; allowed
     return { isColorless: true, allowedColors: [] };
   }
   if (COLOR_ALIAS_MAP[cleanVal]) {
-    return { isColorless: false, allowedColors: COLOR_ALIAS_MAP[cleanVal] };
+    const mapped = COLOR_ALIAS_MAP[cleanVal];
+    return { isColorless: mapped.length === 0, allowedColors: mapped };
   }
   const chars = Array.from(new Set(cleanVal.toUpperCase().split('').filter(c => ['W', 'U', 'B', 'R', 'G'].includes(c))));
   return { isColorless: chars.length === 0, allowedColors: chars };
+}
+
+/**
+ * Standard MTG Color & Commander Identity Set Evaluator
+ * Supports:
+ * - <= (subset of: all card colors must be in target; colorless is trivially subset)
+ * - <  (strict proper subset of)
+ * - >= (superset of: card contains at least all target colors)
+ * - >  (strict proper superset of)
+ * - =  (exact match: exact set of colors)
+ * - != (not exact match)
+ * - :  (default: subset for Commander Identity, superset for Color)
+ */
+export function matchColorSet(
+  cardColors: string[] | undefined,
+  targetColors: string[],
+  isColorlessTarget: boolean,
+  op: string = ':',
+  isCommanderIdentity: boolean = false
+): boolean {
+  const cardSet = new Set((cardColors || []).map(c => c.toUpperCase()));
+  const targetSet = new Set(targetColors.map(c => c.toUpperCase()));
+
+  let normalizedOp = op;
+  if (normalizedOp === '=<') normalizedOp = '<=';
+  if (normalizedOp === '=>') normalizedOp = '>=';
+  if (normalizedOp === '==') normalizedOp = '=';
+
+  if (normalizedOp === ':') {
+    if (isCommanderIdentity) {
+      // Commander Identity default is subset (<=) per deck legality rules
+      normalizedOp = '<=';
+    } else {
+      // Color default (c:) in MTG Scryfall is superset (>=) (contains target colors)
+      normalizedOp = isColorlessTarget ? '=' : '>=';
+    }
+  }
+
+  if (isColorlessTarget) {
+    switch (normalizedOp) {
+      case '<=':
+      case '=':
+        return cardSet.size === 0;
+      case '<':
+        return false;
+      case '>=':
+        return true;
+      case '>':
+      case '!=':
+        return cardSet.size > 0;
+      default:
+        return cardSet.size === 0;
+    }
+  }
+
+  switch (normalizedOp) {
+    case '<=':
+      // Subset: every color on the card must be in targetSet (colorless cards cardSet.size === 0 match)
+      return Array.from(cardSet).every(c => targetSet.has(c));
+    case '<':
+      // Strict proper subset
+      return Array.from(cardSet).every(c => targetSet.has(c)) && cardSet.size < targetSet.size;
+    case '>=':
+      // Superset: card has at least all colors in target
+      return Array.from(targetSet).every(c => cardSet.has(c));
+    case '>':
+      // Strict proper superset: card has all target colors and at least one more
+      return Array.from(targetSet).every(c => cardSet.has(c)) && cardSet.size > targetSet.size;
+    case '=':
+      // Exact match
+      return cardSet.size === targetSet.size && Array.from(cardSet).every(c => targetSet.has(c));
+    case '!=':
+      return !(cardSet.size === targetSet.size && Array.from(cardSet).every(c => targetSet.has(c)));
+    default:
+      return Array.from(targetSet).every(c => cardSet.has(c));
+  }
+}
+
+/**
+ * Common Scryfall Oracle / Functional Tag mapping for offline and local inventory evaluation
+ */
+export const COMMON_ORACLE_TAGS: Record<string, RegExp> = {
+  removal: /\b(destroy target|exile target|deals? \d+ damage to target|target (creature|permanent|player|planeswalker|artifact|enchantment) gets -\d+|return target [^.]+ to its owner's hand|counter target)\b/i,
+  threaten: /\bgain control of target (creature|permanent) until end of turn\b/i,
+  ramp: /(search your library for (a|an|up to \d+) (basic )?land|(add|adds)\s*(\{[a-z0-9/]+\}|\w+\s+mana)|put (a|an|target) land card (from your hand |onto the battlefield))/i,
+  draw: /\bdraw(s)? (a|\d+|X) card(s)?\b/i,
+  'card-draw': /\bdraw(s)? (a|\d+|X) card(s)?\b/i,
+  tutor: /\bsearch your library for a (card|creature|artifact|enchantment|instant|sorcery|land)\b/i,
+  counterspell: /\bcounter target\b/i,
+  counter: /\bcounter target\b/i,
+  wipe: /\b(destroy all|exile all|deals? \d+ damage to each (creature|permanent))\b/i,
+  boardwipe: /\b(destroy all|exile all|deals? \d+ damage to each (creature|permanent))\b/i,
+  wrath: /\b(destroy all|exile all)\b/i,
+  bounce: /\breturn target [^.]+ to its owner's hand\b/i,
+  burn: /\bdeals? \d+ damage to (any target|target (player|opponent|creature))\b/i,
+  reanimate: /\breturn (target )?(creature|permanent) card from your graveyard to the battlefield\b/i,
+  anthem: /\bcreatures you control get \+[0-9]+\/\+[0-9]+/i,
+  sacrifice: /\bsacrifice (a|an|another)\b/i,
+  'sac-outlet': /\bsacrifice a (creature|permanent|artifact):/i,
+  lifegain: /\bgain(s)? \d+ life\b/i,
+  mill: /\bmill(s)? \d+ card/i,
+  cantrip: /\bdraw a card\b/i,
+  token: /\bcreate(s)? (a|\d+|an|X) [^.]+ token/i,
+  tokens: /\bcreate(s)? (a|\d+|an|X) [^.]+ token/i,
+  blink: /\bexile (target|another) [^.]+, then return (it|that card)\b/i,
+  flicker: /\bexile (target|another) [^.]+, then return (it|that card)\b/i,
+  hatebear: /\b(can't cast|players can't|opponents can't|spells cost \{\d+\} more)\b/i,
+  stax: /\b(can't cast|players can't|opponents can't|spells cost \{\d+\} more|enter the battlefield tapped)\b/i,
+  protection: /\b(protection from|hexproof|indestructible|ward \{\d+\})\b/i,
+  hexproof: /\bhexproof\b/i,
+  indestructible: /\bindestructible\b/i,
+  ward: /\bward(\s*\{|\b)/i,
+  'extra-turn': /\btake an extra turn\b/i,
+  'grave-hate': /\bexile (all|target) (cards? from (target|a) )?graveyard/i,
+  drain: /\b(target opponent loses \d+ life and you gain|deals? \d+ damage .+ you gain \d+ life)\b/i,
+  clone: /\byou may have [^.]+ enter the battlefield as a copy\b/i,
+  recursion: /\breturn target [^.]+ from your graveyard to your hand\b/i,
+  evasion: /\b(flying|menace|trample|unblockable|can't be blocked|shadow|fear|intimidate|horsemanship)\b/i,
+  flying: /\bflying\b/i,
+  trample: /\btrample\b/i,
+  menace: /\bmenace\b/i,
+  deathtouch: /\bdeathtouch\b/i,
+  lifelink: /\blifelink\b/i,
+  haste: /\bhaste\b/i,
+  vigilance: /\bvigilance\b/i,
+  firststrike: /\bfirst strike\b/i,
+  doublestrike: /\bdouble strike\b/i,
+  scry: /\bscry \d+\b/i,
+};
+
+export function cardMatchesTag(card: ScryfallCard, tag: string): boolean {
+  if (!tag) return true;
+  const normalizedTag = tag.toLowerCase().replace(/['"_\s]+/g, '-');
+  
+  if (COMMON_ORACLE_TAGS[normalizedTag]) {
+    if (COMMON_ORACLE_TAGS[normalizedTag].test(card.oracle_text || '')) {
+      return true;
+    }
+  }
+
+  const rawWord = normalizedTag.replace(/-/g, '');
+  if (COMMON_ORACLE_TAGS[rawWord]) {
+    if (COMMON_ORACLE_TAGS[rawWord].test(card.oracle_text || '')) {
+      return true;
+    }
+  }
+
+  const text = (card.oracle_text || '').toLowerCase();
+  const typeLine = (card.type_line || '').toLowerCase();
+  const searchWord = tag.toLowerCase().replace(/[-_]+/g, ' ');
+
+  return text.includes(searchWord) || typeLine.includes(searchWord) || text.includes(normalizedTag);
 }
 
 /**
@@ -448,18 +627,35 @@ export function cardMatchesSyntax(card: ScryfallCard, orGroups: SyntaxToken[][])
       if (token.field) {
         const field = token.field;
         const val = token.value?.toLowerCase() || '';
+        const op = token.op || ':';
 
         switch (field) {
           case 'cmc':
-          case 'mv': {
+          case 'mv':
+          case 'manavalue': {
             const numVal = parseFloat(val);
             if (isNaN(numVal)) return true;
-            if (token.op === '<=' || token.op === '=<') matches = card.cmc <= numVal;
-            else if (token.op === '>=' || token.op === '=>') matches = card.cmc >= numVal;
-            else if (token.op === '<') matches = card.cmc < numVal;
-            else if (token.op === '>') matches = card.cmc > numVal;
-            else if (token.op === '!=' || token.op === '<>') matches = card.cmc !== numVal;
+            if (op === '<=') matches = card.cmc <= numVal;
+            else if (op === '>=') matches = card.cmc >= numVal;
+            else if (op === '<') matches = card.cmc < numVal;
+            else if (op === '>') matches = card.cmc > numVal;
+            else if (op === '!=') matches = card.cmc !== numVal;
             else matches = card.cmc === numVal;
+            break;
+          }
+          case 'p':
+          case 'price':
+          case 'eur':
+          case 'usd': {
+            const numVal = parseFloat(val);
+            if (isNaN(numVal)) return true;
+            const price = typeof card.price_eur === 'number' ? card.price_eur : 0;
+            if (op === '<=') matches = price <= numVal;
+            else if (op === '>=') matches = price >= numVal;
+            else if (op === '<') matches = price < numVal;
+            else if (op === '>') matches = price > numVal;
+            else if (op === '!=') matches = Math.abs(price - numVal) >= 0.01;
+            else matches = Math.abs(price - numVal) < 0.01;
             break;
           }
           case 't':
@@ -467,36 +663,24 @@ export function cardMatchesSyntax(card: ScryfallCard, orGroups: SyntaxToken[][])
             matches = card.type_line.toLowerCase().includes(val);
             break;
           case 'c':
-          case 'color': {
-            if (val === 'c' || val === 'colorless') {
-              matches = card.colors.length === 0;
-            } else {
-              const reqColors = val.toUpperCase().split('');
-              matches = reqColors.every(c => card.colors.includes(c));
-            }
+          case 'color':
+          case 'colors': {
+            const { isColorless, allowedColors } = parseAllowedColors(val);
+            matches = matchColorSet(card.colors, allowedColors, isColorless, op, false);
             break;
           }
           case 'id':
           case 'ci':
-          case 'identity': {
+          case 'identity':
+          case 'commander': {
             const { isColorless, allowedColors } = parseAllowedColors(val);
-            const cardId = card.color_identity || [];
-
-            if (isColorless) {
-              matches = cardId.length === 0;
-            } else if (token.op === '=') {
-              matches = cardId.length === allowedColors.length && cardId.every(c => allowedColors.includes(c));
-            } else if (token.op === '>=') {
-              matches = allowedColors.every(c => cardId.includes(c));
-            } else if (token.op === '>') {
-              matches = allowedColors.every(c => cardId.includes(c)) && cardId.length > allowedColors.length;
-            } else if (token.op === '<') {
-              matches = cardId.every(c => allowedColors.includes(c)) && cardId.length < allowedColors.length;
-            } else {
-              // MTG Commander identity inclusion (subsetting):
-              // All colors in cardId must be contained in allowedColors (colorless cards cardId=[] trivially match)
-              matches = cardId.every(c => allowedColors.includes(c));
-            }
+            matches = matchColorSet(card.color_identity, allowedColors, isColorless, op, true);
+            break;
+          }
+          case 'otag':
+          case 'tag':
+          case 'function': {
+            matches = cardMatchesTag(card, val);
             break;
           }
           case 'o':
