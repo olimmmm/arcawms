@@ -252,6 +252,7 @@ export const SkeuomorphicViewer: React.FC = () => {
     setSelectedDrawer(drawer);
     setSelectedBatch(null);
     setIsViewingBrewing(false);
+    window.scrollTo({ top: 0, behavior: 'instant' });
   };
 
   const handleOpenBrewing = () => {
@@ -261,12 +262,14 @@ export const SkeuomorphicViewer: React.FC = () => {
     setSelectedUnit(null);
     setSelectedDrawer(null);
     setSelectedBatch(null);
+    window.scrollTo({ top: 0, behavior: 'instant' });
   };
 
   const handleOpenBatch = (batchIndex: number) => {
     playSound('click');
     triggerHaptic('light');
     setSelectedBatch(batchIndex);
+    window.scrollTo({ top: 0, behavior: 'instant' });
   };
 
   const handleBackToCabinet = () => {
@@ -275,11 +278,13 @@ export const SkeuomorphicViewer: React.FC = () => {
     setSelectedDrawer(null);
     setSelectedBatch(null);
     setIsViewingBrewing(false);
+    window.scrollTo({ top: 0, behavior: 'instant' });
   };
 
   const handleBackToDrawer = () => {
     playSound('skip');
     setSelectedBatch(null);
+    window.scrollTo({ top: 0, behavior: 'instant' });
   };
 
   // Dynamic unit management
@@ -441,21 +446,22 @@ export const SkeuomorphicViewer: React.FC = () => {
                       return (
                         <button
                           key={d}
+                          type="button"
                           onClick={() => handleOpenDrawer(u, d)}
-                          className="group relative bg-gradient-to-b from-neutral-800 via-neutral-850 to-neutral-900 hover:from-neutral-750 hover:to-neutral-800 border-2 border-stone-700/80 hover:border-amber-500/80 rounded-xl p-3 sm:p-4 text-center shadow-lg hover:shadow-amber-500/10 hover:-translate-y-0.5 active:translate-y-0 transition-all cursor-pointer flex flex-col items-center justify-between min-h-[82px] sm:min-h-[96px]"
+                          className="group relative bg-gradient-to-b from-neutral-800 via-neutral-850 to-neutral-900 hover:from-neutral-750 hover:to-neutral-800 border-2 border-stone-700/80 hover:border-amber-500/80 rounded-xl p-3 sm:p-4 text-center shadow-lg hover:shadow-amber-500/10 sm:hover:-translate-y-0.5 active:scale-[0.98] transition-all cursor-pointer flex flex-col items-center justify-between min-h-[82px] sm:min-h-[96px] touch-manipulation"
                         >
                           {/* Stamped Brass Drawer Label Plate */}
-                          <div className="bg-gradient-to-b from-amber-600/30 to-amber-900/40 border border-amber-500/40 rounded px-2.5 py-0.5 shadow-inner">
+                          <div className="bg-gradient-to-b from-amber-600/30 to-amber-900/40 border border-amber-500/40 rounded px-2.5 py-0.5 shadow-inner pointer-events-none">
                             <span className="font-mono-coordinate font-black text-amber-300 text-xs sm:text-sm tracking-wider">
                               {u}.{d}
                             </span>
                           </div>
 
                           {/* Recessed Metal Drawer Handle Pull */}
-                          <div className="w-12 sm:w-16 h-2 sm:h-2.5 rounded-full bg-gradient-to-b from-stone-950 to-neutral-800 border border-stone-700 shadow-inner my-1 group-hover:bg-amber-500/30 transition-colors" />
+                          <div className="w-12 sm:w-16 h-2 sm:h-2.5 rounded-full bg-gradient-to-b from-stone-950 to-neutral-800 border border-stone-700 shadow-inner my-1 group-hover:bg-amber-500/30 transition-colors pointer-events-none" />
 
                           {/* Batch & Card Count Badge */}
-                          <div className="text-[10px] sm:text-[11px] font-mono text-stone-400">
+                          <div className="text-[10px] sm:text-[11px] font-mono text-stone-400 pointer-events-none">
                             {totalCards > 0 ? (
                               <span className="text-amber-400/90 font-bold">
                                 {totalCards} cards ({batchCount} b)
@@ -586,11 +592,12 @@ export const SkeuomorphicViewer: React.FC = () => {
                   return (
                     <button
                       key={bIndex}
+                      type="button"
                       onClick={() => handleOpenBatch(bIndex)}
-                      className="group relative bg-gradient-to-b from-amber-700/20 via-neutral-900 to-neutral-950 hover:from-amber-600/30 hover:to-neutral-900 border-2 border-stone-700 hover:border-amber-500 rounded-2xl p-4 text-left shadow-lg hover:shadow-amber-500/10 hover:-translate-y-1 transition-all cursor-pointer flex flex-col justify-between h-36"
+                      className="group relative bg-gradient-to-b from-amber-700/20 via-neutral-900 to-neutral-950 hover:from-amber-600/30 hover:to-neutral-900 border-2 border-stone-700 hover:border-amber-500 rounded-2xl p-4 text-left shadow-lg hover:shadow-amber-500/10 sm:hover:-translate-y-1 active:scale-[0.98] transition-all cursor-pointer flex flex-col justify-between h-36 touch-manipulation"
                     >
                       {/* Top Physical Divider Tab */}
-                      <div className="flex items-center justify-between w-full">
+                      <div className="flex items-center justify-between w-full pointer-events-none">
                         <span className="px-2 py-0.5 rounded bg-amber-500/20 border border-amber-500/40 text-amber-300 font-mono-coordinate font-black text-xs">
                           {coordStr}
                         </span>
@@ -598,14 +605,14 @@ export const SkeuomorphicViewer: React.FC = () => {
                       </div>
 
                       {/* Stack Texture Line */}
-                      <div className="space-y-1 my-2 opacity-60 group-hover:opacity-100 transition-opacity">
+                      <div className="space-y-1 my-2 opacity-60 group-hover:opacity-100 transition-opacity pointer-events-none">
                         <div className="h-0.5 bg-stone-700 w-full rounded" />
                         <div className="h-0.5 bg-stone-700 w-4/5 rounded" />
                         <div className="h-0.5 bg-stone-700 w-2/3 rounded" />
                       </div>
 
                       {/* Count & Details */}
-                      <div>
+                      <div className="pointer-events-none">
                         <div className="text-sm font-bold text-white font-mono">
                           {batchCards.length} Cards
                         </div>

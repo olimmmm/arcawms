@@ -5,6 +5,10 @@
     -webkit-tap-highlight-color: transparent;
   }
 
+  html, body {
+    overflow-x: clip;
+  }
+
   body {
     font-feature-settings: "cv02", "cv03", "cv04", "cv11";
   }
