@@ -494,6 +494,56 @@ class ArcaDatabase {
     this.notify();
   }
 
+  public upsertCardsBatch(cardsList: ScryfallCard[]) {
+    if (!cardsList || cardsList.length === 0) return;
+
+    let instancesHealed = false;
+
+    for (const card of cardsList) {
+      const cleanName = card.name.trim().toLowerCase();
+
+      // Preserve existing price if incoming card has price 0 but existing had valid price
+      const existing = this.getCard(cleanName);
+      if (existing && existing.price_eur > 0 && (!card.price_eur || card.price_eur === 0)) {
+        card.price_eur = existing.price_eur;
+        if (!card.image_url_normal || !card.image_url_normal.startsWith('https://cards.scryfall.io')) {
+          card.image_url_normal = existing.image_url_normal;
+        }
+      }
+
+      // 1. Remove duplicate card entries with same name
+      for (const [id, c] of this.cards.entries()) {
+        if (c.name.trim().toLowerCase() === cleanName && id !== card.oracle_id) {
+          this.cards.delete(id);
+        }
+      }
+
+      // 2. Store canonical card
+      this.cards.set(card.oracle_id, card);
+
+      // 3. Heal any instances whose card_name matches
+      for (const [instId, inst] of this.instances.entries()) {
+        if (inst.card_name.trim().toLowerCase() === cleanName) {
+          if (inst.oracle_id !== card.oracle_id || inst.card_name !== card.name) {
+            this.instances.set(instId, {
+              ...inst,
+              card_name: card.name,
+              oracle_id: card.oracle_id,
+              updated_at: new Date().toISOString()
+            });
+            instancesHealed = true;
+          }
+        }
+      }
+    }
+
+    this.saveCards();
+    if (instancesHealed) {
+      this.saveInstances();
+    }
+    this.notify();
+  }
+
   /**
    * Scans collection to reconcile dummy UUIDs with real Scryfall cards
    * and link all physical card instances to canonical market prices.

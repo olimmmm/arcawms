@@ -18,7 +18,7 @@ import {
 import { CardInstance, ScryfallCard } from '../types';
 import { db, generateUUID } from '../services/db';
 import { formatLocationId, parseLocationId } from '../services/pickPath';
-import { getScryfallImageFallback, CARD_BACK_IMAGE, enrichMissingCards } from '../services/scryfall';
+import { getScryfallImageFallback, CARD_BACK_IMAGE } from '../services/scryfall';
 import { playSound, triggerHaptic } from '../services/audio';
 
 interface UndoAction {
@@ -75,10 +75,6 @@ export const SkeuomorphicViewer: React.FC = () => {
       setUnitCount(db.getUnitCount());
     });
   }, []);
-
-  useEffect(() => {
-    enrichMissingCards();
-  }, [selectedBatch, selectedDrawer, selectedUnit]);
 
   useEffect(() => {
     return () => {

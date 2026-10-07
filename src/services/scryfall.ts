@@ -232,6 +232,7 @@ export async function fetchScryfallCardByName(cardName: string): Promise<Scryfal
  * and fetches them in fast 75-card batches from Scryfall.
  */
 let isEnriching = false;
+const alreadyCheckedEnrichNames = new Set<string>();
 
 export async function enrichMissingCards(): Promise<number> {
   if (isEnriching) return 0;
@@ -253,7 +254,9 @@ export async function enrichMissingCards(): Promise<number> {
     const namesToEnrich = new Set<string>();
 
     for (const inst of allInstances) {
-      const meta = cardMap.get(inst.card_name.toLowerCase()) || cardMap.get(inst.oracle_id);
+      const clean = inst.card_name.trim().toLowerCase();
+      if (alreadyCheckedEnrichNames.has(clean)) continue;
+      const meta = cardMap.get(clean) || cardMap.get(inst.oracle_id);
       const needsImage = !meta || !meta.image_url_normal || !meta.image_url_normal.startsWith('https://cards.scryfall.io');
       const needsPrice = !meta || !meta.price_eur || meta.price_eur === 0;
 
@@ -263,6 +266,8 @@ export async function enrichMissingCards(): Promise<number> {
     }
 
     for (const c of allCards) {
+      const clean = c.name.trim().toLowerCase();
+      if (alreadyCheckedEnrichNames.has(clean)) continue;
       const needsImage = !c.image_url_normal || !c.image_url_normal.startsWith('https://cards.scryfall.io');
       const needsPrice = !c.price_eur || c.price_eur === 0;
 
@@ -271,22 +276,24 @@ export async function enrichMissingCards(): Promise<number> {
       }
     }
 
+    // Mark as checked so we never loop on cards that have no EUR market price or are unresolvable
+    for (const name of namesToEnrich) {
+      alreadyCheckedEnrichNames.add(name.toLowerCase());
+    }
+
     if (namesToEnrich.size === 0) {
-      db.healAndDeduplicateCards();
       return 0;
     }
 
     const namesList = Array.from(namesToEnrich);
     const fetchedMap = await fetchScryfallCardsBatch(namesList);
 
-    let updatedCount = 0;
-    for (const card of fetchedMap.values()) {
-      db.upsertCard(card);
-      updatedCount++;
+    const cardsToUpsert = Array.from(fetchedMap.values());
+    if (cardsToUpsert.length > 0) {
+      db.upsertCardsBatch(cardsToUpsert);
     }
 
-    db.healAndDeduplicateCards();
-    return updatedCount;
+    return cardsToUpsert.length;
   } catch (e) {
     console.warn('Error during auto-enrichment:', e);
     return 0;

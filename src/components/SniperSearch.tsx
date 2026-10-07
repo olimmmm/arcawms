@@ -23,8 +23,7 @@ import {
   searchScryfallAPI, 
   scryfallAutocomplete, 
   getScryfallImageFallback, 
-  CARD_BACK_IMAGE, 
-  enrichMissingCards 
+  CARD_BACK_IMAGE 
 } from '../services/scryfall';
 import { formatLocationId, parseLocationId, getSmartDefaultBatchLocation } from '../services/pickPath';
 import { playSound, triggerHaptic } from '../services/audio';
@@ -215,7 +214,6 @@ export const SniperSearch: React.FC = () => {
   const [unitCount, setUnitCount] = useState<number>(() => db.getUnitCount());
 
   useEffect(() => {
-    enrichMissingCards();
     return db.subscribe(() => {
       setInstances(db.getAllInstances());
       setCards(db.getAllCards());
