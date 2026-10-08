@@ -212,12 +212,15 @@ export const SniperSearch: React.FC = () => {
   // Top-left card menu state & toast
   const [cardMenuOpenId, setCardMenuOpenId] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [toastUndoAction, setToastUndoAction] = useState<(() => void) | null>(null);
 
-  const showToast = (msg: string) => {
+  const showToast = (msg: string, onUndo?: () => void) => {
     setToastMessage(msg);
+    setToastUndoAction(onUndo ? () => onUndo : null);
     setTimeout(() => {
       setToastMessage(prev => (prev === msg ? null : prev));
-    }, 3500);
+      setToastUndoAction(null);
+    }, 4500);
   };
 
   // Reactive DB subscriptions
@@ -501,14 +504,21 @@ export const SniperSearch: React.FC = () => {
   const handleToggleProxy = (inst: CardInstance) => {
     playSound('click');
     triggerHaptic('light');
+    const snapshot: CardInstance = { ...inst };
     const res = db.toggleProxy(inst.instance_id);
     setCardMenuOpenId(null);
+    const revert = () => {
+      playSound('success');
+      triggerHaptic('medium');
+      db.restoreInstance(snapshot);
+      showToast(`Reverted "${inst.card_name}" back to original state`);
+    };
     if (res.relocatedToProxyBox) {
-      showToast(`Marked "${inst.card_name}" as Proxy ➔ relocated to Proxy Box`);
+      showToast(`Marked "${inst.card_name}" as Proxy ➔ relocated to Proxy Box`, revert);
     } else if (res.is_proxy) {
-      showToast(`Marked "${inst.card_name}" as Proxy`);
+      showToast(`Marked "${inst.card_name}" as Proxy`, revert);
     } else {
-      showToast(`Marked "${inst.card_name}" as Real Card`);
+      showToast(`Marked "${inst.card_name}" as Real Card`, revert);
     }
   };
 
@@ -1330,9 +1340,22 @@ export const SniperSearch: React.FC = () => {
         <div className="fixed bottom-6 right-6 z-50 bg-slate-900/95 border border-slate-700 text-slate-100 px-4 py-3 rounded-xl shadow-2xl flex items-center gap-2 text-xs font-mono backdrop-blur animate-in fade-in slide-in-from-bottom-2">
           <Sparkles className="h-4 w-4 text-amber-400 shrink-0" />
           <span>{toastMessage}</span>
+          {toastUndoAction && (
+            <button
+              onClick={() => {
+                toastUndoAction();
+                setToastMessage(null);
+                setToastUndoAction(null);
+              }}
+              className="ml-2 px-2.5 py-1 rounded bg-amber-500/20 text-amber-300 hover:bg-amber-500/30 font-bold border border-amber-500/40 cursor-pointer flex items-center gap-1 shadow"
+            >
+              <RotateCcw className="h-3 w-3" />
+              <span>Undo ↺</span>
+            </button>
+          )}
           <button 
-            onClick={() => setToastMessage(null)}
-            className="ml-2 text-slate-500 hover:text-white cursor-pointer"
+            onClick={() => { setToastMessage(null); setToastUndoAction(null); }}
+            className="ml-1 text-slate-500 hover:text-white cursor-pointer"
           >
             <X className="h-3.5 w-3.5" />
           </button>

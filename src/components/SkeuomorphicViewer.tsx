@@ -24,7 +24,7 @@ import { playSound, triggerHaptic } from '../services/audio';
 
 interface UndoAction {
   id: string;
-  type: 'checkout' | 'remove' | 'relocate' | 'return';
+  type: 'checkout' | 'remove' | 'relocate' | 'return' | 'proxy';
   instance: CardInstance;
   cardName: string;
   previousLocation: string | null;
@@ -189,7 +189,7 @@ export const SkeuomorphicViewer: React.FC = () => {
 
   // Trigger an undoable action with countdown progress bar
   const triggerUndoableAction = (
-    type: 'checkout' | 'remove' | 'relocate' | 'return',
+    type: 'checkout' | 'remove' | 'relocate' | 'return' | 'proxy',
     inst: CardInstance,
     execute: () => void,
     message: string
@@ -244,31 +244,31 @@ export const SkeuomorphicViewer: React.FC = () => {
       undoTimerRef.current = null;
     }
 
-    const { type, instance, previousLocation } = activeUndo;
+    try {
+      const { type, instance, previousLocation } = activeUndo;
 
-    if (type === 'checkout') {
-      if (instance.is_proxy || instance.state === 'P' || previousLocation === 'Proxy Box') {
-        db.returnToProxyBox(instance.instance_id);
-      } else if (previousLocation) {
-        db.returnToChaos(instance.instance_id, previousLocation);
-      } else {
+      if (type === 'proxy') {
         db.restoreInstance(instance);
-      }
-    } else if (type === 'remove') {
-      db.restoreInstance(instance);
-    } else if (type === 'relocate') {
-      if (previousLocation === 'Proxy Box') {
-        db.moveToProxyBox(instance.instance_id);
-      } else if (previousLocation) {
-        db.updateLocation(instance.instance_id, previousLocation);
-      } else {
+      } else if (type === 'checkout') {
+        if (instance.is_proxy || instance.state === 'P' || previousLocation === 'Proxy Box') {
+          db.returnToProxyBox(instance.instance_id);
+        } else if (previousLocation) {
+          db.returnToChaos(instance.instance_id, previousLocation);
+        } else {
+          db.restoreInstance(instance);
+        }
+      } else if (type === 'remove') {
         db.restoreInstance(instance);
+      } else if (type === 'relocate') {
+        db.restoreInstance(instance);
+      } else if (type === 'return') {
+        db.checkoutToDecks(instance.instance_id);
       }
-    } else if (type === 'return') {
-      db.checkoutToDecks(instance.instance_id);
+    } catch (err) {
+      console.error('[ArcaWMS] Error during undo reversal:', err);
+    } finally {
+      setActiveUndo(null);
     }
-
-    setActiveUndo(null);
   };
 
   // Navigation handlers
@@ -332,14 +332,29 @@ export const SkeuomorphicViewer: React.FC = () => {
   const handleToggleProxy = (inst: CardInstance) => {
     playSound('click');
     triggerHaptic('light');
+    const snapshot: CardInstance = { ...inst };
     const res = db.toggleProxy(inst.instance_id);
     setCardMenuOpenId(null);
     if (res.relocatedToProxyBox) {
       triggerUndoableAction(
-        'relocate',
-        inst,
+        'proxy',
+        snapshot,
         () => {},
         `Marked "${inst.card_name}" as Proxy ➔ relocated to Proxy Box`
+      );
+    } else if (res.is_proxy) {
+      triggerUndoableAction(
+        'proxy',
+        snapshot,
+        () => {},
+        `Marked "${inst.card_name}" as Proxy`
+      );
+    } else {
+      triggerUndoableAction(
+        'proxy',
+        snapshot,
+        () => {},
+        `Marked "${inst.card_name}" as Real Card`
       );
     }
   };

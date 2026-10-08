@@ -360,6 +360,33 @@ class ArcaDatabase {
     }
 
     this.healAndDeduplicateCards();
+
+    // Sanitize proxy invariants:
+    // 1. Storage Units (State A) CANNOT contain proxies. If a card is in State A, is_proxy MUST be false.
+    // 2. Proxy Box (State P) cards MUST have is_proxy = true.
+    let instancesSanitized = false;
+    for (const [instId, inst] of this.instances.entries()) {
+      if (inst.state === 'A' && inst.is_proxy) {
+        this.instances.set(instId, {
+          ...inst,
+          is_proxy: false,
+          updated_at: new Date().toISOString()
+        });
+        instancesSanitized = true;
+      } else if (inst.state === 'P' && !inst.is_proxy) {
+        this.instances.set(instId, {
+          ...inst,
+          is_proxy: true,
+          updated_at: new Date().toISOString()
+        });
+        instancesSanitized = true;
+      }
+    }
+    if (instancesSanitized) {
+      this.saveInstances();
+      this.touchUpdated();
+    }
+
     this.initialized = true;
   }
 
@@ -937,18 +964,23 @@ class ArcaDatabase {
    * Restore an instance (for on-page undo)
    */
   public restoreInstance(instance: CardInstance): void {
-    this.instances.set(instance.instance_id, instance);
+    const sanitized: CardInstance = {
+      ...instance,
+      is_proxy: instance.state === 'A' ? false : (instance.state === 'P' ? true : !!instance.is_proxy),
+      updated_at: new Date().toISOString()
+    };
+    this.instances.set(sanitized.instance_id, sanitized);
     this.saveInstances();
     this.touchUpdated();
 
     this.logActivity({
       type: 'added',
-      card_name: instance.card_name,
+      card_name: sanitized.card_name,
       count: 1,
-      to_location: instance.location_id || 'Brewing/Decks',
-      details: `Restored back to ${instance.location_id || 'Brewing'} (Undo)`,
-      instance_id: instance.instance_id,
-      instance_snapshot: { ...instance }
+      to_location: sanitized.location_id || (sanitized.state === 'B' ? 'Brewing/Decks' : 'Proxy Box'),
+      details: `Restored back to ${sanitized.location_id || (sanitized.state === 'B' ? 'Brewing' : 'Proxy Box')} (Undo)`,
+      instance_id: sanitized.instance_id,
+      instance_snapshot: { ...sanitized }
     });
 
     this.notify();
@@ -991,6 +1023,9 @@ class ArcaDatabase {
               if (item.to_location === 'Brewing/Decks' && cand.state === 'B') {
                 inst = cand;
                 break;
+              } else if (item.to_location === 'Proxy Box' && cand.state === 'P') {
+                inst = cand;
+                break;
               } else if (cand.location_id === item.to_location) {
                 inst = cand;
                 break;
@@ -1000,17 +1035,30 @@ class ArcaDatabase {
         }
 
         if (inst) {
-          const wasInBrewing = item.from_location === 'Brewing/Decks' || !item.from_location;
-          const wasInProxyBox = item.from_location === 'Proxy Box';
-          const restoredState: 'A' | 'B' | 'P' = wasInProxyBox ? 'P' : (wasInBrewing ? 'B' : 'A');
-          const restoredLoc = wasInProxyBox ? 'Proxy Box' : (wasInBrewing ? null : (item.from_location || null));
+          if (item.instance_snapshot) {
+            const restoredState = item.instance_snapshot.state;
+            const restoredIsProxy = restoredState === 'A' ? false : (restoredState === 'P' ? true : !!item.instance_snapshot.is_proxy);
+            this.instances.set(inst.instance_id, {
+              ...item.instance_snapshot,
+              state: restoredState,
+              is_proxy: restoredIsProxy,
+              updated_at: new Date().toISOString()
+            });
+          } else {
+            const wasInBrewing = item.from_location === 'Brewing/Decks' || !item.from_location;
+            const wasInProxyBox = item.from_location === 'Proxy Box';
+            const restoredState: 'A' | 'B' | 'P' = wasInProxyBox ? 'P' : (wasInBrewing ? 'B' : 'A');
+            const restoredLoc = wasInProxyBox ? 'Proxy Box' : (wasInBrewing ? null : (item.from_location || null));
+            const restoredIsProxy = restoredState === 'P' ? true : (restoredState === 'A' ? false : !!inst.is_proxy);
 
-          this.instances.set(inst.instance_id, {
-            ...inst,
-            state: restoredState,
-            location_id: restoredLoc,
-            updated_at: new Date().toISOString()
-          });
+            this.instances.set(inst.instance_id, {
+              ...inst,
+              state: restoredState,
+              location_id: restoredLoc,
+              is_proxy: restoredIsProxy,
+              updated_at: new Date().toISOString()
+            });
+          }
           this.saveInstances();
           this.touchUpdated();
         }
@@ -1056,6 +1104,10 @@ class ArcaDatabase {
           updated_at: new Date().toISOString()
         };
 
+        if (restored.state === 'A') {
+          restored.is_proxy = false;
+        }
+
         this.instances.set(restored.instance_id, restored);
         this.saveInstances();
         this.touchUpdated();
@@ -1091,11 +1143,13 @@ class ArcaDatabase {
           const isGoingToProxyBox = item.to_location === 'Proxy Box';
           const targetState: 'A' | 'B' | 'P' = isGoingToProxyBox ? 'P' : (isGoingToBrewing ? 'B' : 'A');
           const targetLoc = isGoingToProxyBox ? 'Proxy Box' : (isGoingToBrewing ? null : (item.to_location || null));
+          const targetIsProxy = targetState === 'P' ? true : (targetState === 'A' ? false : !!inst.is_proxy);
 
           this.instances.set(inst.instance_id, {
             ...inst,
             state: targetState,
             location_id: targetLoc,
+            is_proxy: targetIsProxy,
             updated_at: new Date().toISOString()
           });
           this.saveInstances();
@@ -1118,6 +1172,10 @@ class ArcaDatabase {
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString()
         };
+
+        if (restored.state === 'A') {
+          restored.is_proxy = false;
+        }
 
         this.instances.set(restored.instance_id, restored);
         this.saveInstances();
@@ -1160,14 +1218,15 @@ class ArcaDatabase {
 
     for (const inst of this.instances.values()) {
       unique.add(inst.card_name.toLowerCase());
-      if (inst.is_proxy) {
+      // Storage units CANNOT contain proxies: only count if not in State A
+      if (inst.is_proxy && inst.state !== 'A') {
         proxyCount++;
       }
       if (inst.state === 'A') inChaos++;
       else if (inst.state === 'B') inDecks++;
 
       // Proxies MUST always be calculated with a price of £0
-      if (!inst.is_proxy) {
+      if (!inst.is_proxy || inst.state === 'A') {
         const meta = this.getCard(inst.card_name) || this.getCard(inst.oracle_id);
         if (meta && meta.price_eur) {
           totalEur += meta.price_eur;
