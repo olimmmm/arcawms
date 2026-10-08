@@ -4,6 +4,7 @@ import { SniperSearch } from './components/SniperSearch';
 import { PickPathRunner } from './components/PickPathRunner';
 import { SkeuomorphicViewer } from './components/SkeuomorphicViewer';
 import { IngestEngine } from './components/IngestEngine';
+import { CustomListView } from './components/CustomListView';
 import { SettingsSyncModal } from './components/SettingsSyncModal';
 import { db } from './services/db';
 import { syncClient } from './services/sync';
@@ -12,17 +13,18 @@ import { applyTheme, getActiveTheme } from './services/theme';
 import { enrichMissingCards } from './services/scryfall';
 
 export function App() {
-  const [activeTab, setActiveTab] = useState<'search' | 'pickpath' | 'cabinet' | 'ingest'>('search');
+  const [activeTab, setActiveTab] = useState<'search' | 'pickpath' | 'cabinet' | 'ingest' | 'lists'>('search');
   const [stats, setStats] = useState<InventoryStats>(() => db.getStats());
   const [syncStatus, setSyncStatus] = useState<'connected' | 'connecting' | 'disconnected' | 'error'>(
     () => syncClient.getStatus()
   );
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [pendingPickPathDecklist, setPendingPickPathDecklist] = useState<string | null>(null);
 
   // Cross-tab scroll position memory
   const scrollPositions = useRef<Record<string, number>>({});
 
-  const handleTabChange = (nextTab: 'search' | 'pickpath' | 'cabinet' | 'ingest') => {
+  const handleTabChange = (nextTab: 'search' | 'pickpath' | 'cabinet' | 'ingest' | 'lists') => {
     if (nextTab === activeTab) return;
     scrollPositions.current[activeTab] = window.scrollY;
     setActiveTab(nextTab);
@@ -69,10 +71,21 @@ export function App() {
           <SniperSearch />
         </div>
         <div style={{ display: activeTab === 'pickpath' ? 'block' : 'none' }}>
-          <PickPathRunner />
+          <PickPathRunner 
+            pendingDecklist={pendingPickPathDecklist || undefined}
+            onClearPendingDecklist={() => setPendingPickPathDecklist(null)}
+          />
         </div>
         <div style={{ display: activeTab === 'cabinet' ? 'block' : 'none' }}>
           <SkeuomorphicViewer />
+        </div>
+        <div style={{ display: activeTab === 'lists' ? 'block' : 'none' }}>
+          <CustomListView
+            onNavigateToPickPath={(text) => {
+              setPendingPickPathDecklist(text);
+              handleTabChange('pickpath');
+            }}
+          />
         </div>
         <div style={{ display: activeTab === 'ingest' ? 'block' : 'none' }}>
           <IngestEngine />

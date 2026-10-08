@@ -1,10 +1,11 @@
-import { ActivityLogItem, CardInstance, InventoryStats, ScryfallCard } from '../types';
+import { ActivityLogItem, CardInstance, InventoryStats, ScryfallCard, CustomList, CustomListItem } from '../types';
 import { parseLocationId } from './pickPath';
 
 const STORAGE_KEY_INSTANCES = 'arcawms_instances_v2';
 const STORAGE_KEY_CARDS = 'arcawms_cards_v2';
 const STORAGE_KEY_HISTORY = 'arcawms_history_v2';
 const STORAGE_KEY_LAST_UPDATED = 'arcawms_last_updated_v2';
+const STORAGE_KEY_CUSTOM_LISTS = 'arcawms_custom_lists_v2';
 
 export function generateUUID(): string {
   try {
@@ -295,9 +296,55 @@ export const INITIAL_HISTORY: ActivityLogItem[] = [
   { id: 'h-3', type: 'added', card_name: 'The One Ring', count: 1, to_location: '9.C.12', timestamp: new Date(Date.now() - 3600000 * 24).toISOString(), details: 'Ingested into Unit 9 Drawer C' }
 ];
 
+export const SEED_CUSTOM_LISTS: CustomList[] = [
+  {
+    id: 'list-wants-default',
+    name: 'Wants',
+    description: 'Wishlist of cards to acquire or trade for',
+    created_at: new Date(Date.now() - 3600000 * 24 * 7).toISOString(),
+    updated_at: new Date(Date.now() - 3600000 * 24 * 7).toISOString(),
+    items: [
+      {
+        id: 'item-w1',
+        card_name: 'Cyclonic Rift',
+        oracle_id: 'd75b9c82-1b49-4c3e-a1b5-aeef57d6644b',
+        count: 1,
+        notes: 'Need 1 for EDH deck',
+        added_at: new Date(Date.now() - 3600000 * 24 * 5).toISOString()
+      },
+      {
+        id: 'item-w2',
+        card_name: 'The One Ring',
+        oracle_id: '3aa83ed2-f48b-4ce6-a614-2c54ddf50538',
+        count: 1,
+        notes: 'Extended art preferred',
+        added_at: new Date(Date.now() - 3600000 * 24 * 3).toISOString()
+      }
+    ]
+  },
+  {
+    id: 'list-favourites-default',
+    name: 'Favourites',
+    description: 'Highlight binder & prized collection cards',
+    created_at: new Date(Date.now() - 3600000 * 24 * 6).toISOString(),
+    updated_at: new Date(Date.now() - 3600000 * 24 * 6).toISOString(),
+    items: [
+      {
+        id: 'item-f1',
+        card_name: 'Smothering Tithe',
+        oracle_id: '153376c9-dffd-458c-8ce3-a4c8269bc4e9',
+        count: 1,
+        notes: 'Enchantment staple',
+        added_at: new Date(Date.now() - 3600000 * 24 * 4).toISOString()
+      }
+    ]
+  }
+];
+
 class ArcaDatabase {
   private instances: Map<string, CardInstance> = new Map();
   private cards: Map<string, ScryfallCard> = new Map();
+  private customLists: Map<string, CustomList> = new Map();
   private history: ActivityLogItem[] = [];
   private listeners: Set<() => void> = new Set();
   private initialized = false;
@@ -357,6 +404,35 @@ class ArcaDatabase {
       }
     } catch {
       this.history = [...INITIAL_HISTORY];
+    }
+
+    try {
+      const storedLists = localStorage.getItem(STORAGE_KEY_CUSTOM_LISTS);
+      if (storedLists) {
+        const parsed: CustomList[] = JSON.parse(storedLists);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          parsed.forEach(list => {
+            if (list && list.id && list.name) {
+              this.customLists.set(list.id, {
+                id: list.id,
+                name: list.name,
+                description: list.description || '',
+                created_at: list.created_at || new Date().toISOString(),
+                updated_at: list.updated_at || new Date().toISOString(),
+                items: Array.isArray(list.items) ? list.items : []
+              });
+            }
+          });
+        } else {
+          SEED_CUSTOM_LISTS.forEach(l => this.customLists.set(l.id, { ...l, items: [...l.items] }));
+          this.saveCustomLists();
+        }
+      } else {
+        SEED_CUSTOM_LISTS.forEach(l => this.customLists.set(l.id, { ...l, items: [...l.items] }));
+        this.saveCustomLists();
+      }
+    } catch {
+      SEED_CUSTOM_LISTS.forEach(l => this.customLists.set(l.id, { ...l, items: [...l.items] }));
     }
 
     this.healAndDeduplicateCards();
@@ -432,6 +508,225 @@ class ArcaDatabase {
 
   private saveHistory() {
     this.safeSetItem(STORAGE_KEY_HISTORY, JSON.stringify(this.history.slice(0, 100)));
+  }
+
+  private saveCustomLists() {
+    this.safeSetItem(STORAGE_KEY_CUSTOM_LISTS, JSON.stringify(Array.from(this.customLists.values())));
+  }
+
+  // === CUSTOM LISTS CRUD & ITEM MANAGEMENT ===
+  public getCustomLists(): CustomList[] {
+    const lists = Array.from(this.customLists.values());
+    // Enrich items with cached card metadata if available
+    return lists.map(list => ({
+      ...list,
+      items: list.items.map(item => ({
+        ...item,
+        card_metadata: item.card_metadata || this.getCard(item.card_name) || (item.oracle_id ? this.getCard(item.oracle_id) : undefined)
+      }))
+    })).sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+  }
+
+  public getCustomList(id: string): CustomList | undefined {
+    const list = this.customLists.get(id);
+    if (!list) return undefined;
+    return {
+      ...list,
+      items: list.items.map(item => ({
+        ...item,
+        card_metadata: item.card_metadata || this.getCard(item.card_name) || (item.oracle_id ? this.getCard(item.oracle_id) : undefined)
+      }))
+    };
+  }
+
+  public createCustomList(name: string, description?: string): CustomList {
+    const cleanName = name.trim() || 'Untitled List';
+    const newList: CustomList = {
+      id: generateUUID(),
+      name: cleanName,
+      description: description?.trim() || '',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      items: []
+    };
+    this.customLists.set(newList.id, newList);
+    this.saveCustomLists();
+    this.touchUpdated();
+    this.notify();
+    return newList;
+  }
+
+  public renameCustomList(id: string, name: string, description?: string): boolean {
+    const existing = this.customLists.get(id);
+    if (!existing) return false;
+    existing.name = name.trim() || existing.name;
+    if (description !== undefined) {
+      existing.description = description.trim();
+    }
+    existing.updated_at = new Date().toISOString();
+    this.saveCustomLists();
+    this.touchUpdated();
+    this.notify();
+    return true;
+  }
+
+  public deleteCustomList(id: string): boolean {
+    if (!this.customLists.has(id)) return false;
+    this.customLists.delete(id);
+    this.saveCustomLists();
+    this.touchUpdated();
+    this.notify();
+    return true;
+  }
+
+  public addCardToCustomList(
+    listId: string,
+    cardName: string,
+    count = 1,
+    metadata?: ScryfallCard,
+    notes?: string
+  ): CustomListItem | null {
+    const list = this.customLists.get(listId);
+    if (!list) return null;
+
+    const cleanName = cardName.trim();
+    if (!cleanName) return null;
+
+    if (metadata) {
+      this.upsertCard(metadata);
+    }
+    const resolvedMeta = metadata || this.getCard(cleanName);
+
+    const existingIdx = list.items.findIndex(
+      i => i.card_name.trim().toLowerCase() === cleanName.toLowerCase()
+    );
+
+    let updatedItem: CustomListItem;
+    if (existingIdx >= 0) {
+      list.items[existingIdx].count += count;
+      if (notes) {
+        list.items[existingIdx].notes = notes;
+      }
+      if (resolvedMeta && !list.items[existingIdx].oracle_id) {
+        list.items[existingIdx].oracle_id = resolvedMeta.oracle_id;
+      }
+      updatedItem = { ...list.items[existingIdx], card_metadata: resolvedMeta };
+    } else {
+      updatedItem = {
+        id: generateUUID(),
+        card_name: resolvedMeta ? resolvedMeta.name : cleanName,
+        oracle_id: resolvedMeta?.oracle_id,
+        count: Math.max(1, count),
+        notes: notes || '',
+        added_at: new Date().toISOString(),
+        card_metadata: resolvedMeta
+      };
+      list.items.push(updatedItem);
+    }
+
+    list.updated_at = new Date().toISOString();
+    this.saveCustomLists();
+    this.touchUpdated();
+    this.notify();
+    return updatedItem;
+  }
+
+  public addCardsToCustomListBulk(
+    listId: string,
+    itemsToAdd: { name: string; count: number; metadata?: ScryfallCard; notes?: string }[]
+  ): number {
+    const list = this.customLists.get(listId);
+    if (!list || !itemsToAdd || itemsToAdd.length === 0) return 0;
+
+    let addedCount = 0;
+    for (const item of itemsToAdd) {
+      const cleanName = item.name.trim();
+      if (!cleanName) continue;
+
+      if (item.metadata) {
+        this.upsertCard(item.metadata);
+      }
+      const resolvedMeta = item.metadata || this.getCard(cleanName);
+
+      const existingIdx = list.items.findIndex(
+        i => i.card_name.trim().toLowerCase() === cleanName.toLowerCase()
+      );
+
+      if (existingIdx >= 0) {
+        list.items[existingIdx].count += item.count;
+        if (item.notes) list.items[existingIdx].notes = item.notes;
+        if (resolvedMeta && !list.items[existingIdx].oracle_id) {
+          list.items[existingIdx].oracle_id = resolvedMeta.oracle_id;
+        }
+      } else {
+        list.items.push({
+          id: generateUUID(),
+          card_name: resolvedMeta ? resolvedMeta.name : cleanName,
+          oracle_id: resolvedMeta?.oracle_id,
+          count: Math.max(1, item.count),
+          notes: item.notes || '',
+          added_at: new Date().toISOString(),
+          card_metadata: resolvedMeta
+        });
+      }
+      addedCount += item.count;
+    }
+
+    list.updated_at = new Date().toISOString();
+    this.saveCustomLists();
+    this.touchUpdated();
+    this.notify();
+    return addedCount;
+  }
+
+  public removeCardFromCustomList(listId: string, itemId: string): boolean {
+    const list = this.customLists.get(listId);
+    if (!list) return false;
+
+    const initialLen = list.items.length;
+    list.items = list.items.filter(i => i.id !== itemId);
+    if (list.items.length !== initialLen) {
+      list.updated_at = new Date().toISOString();
+      this.saveCustomLists();
+      this.touchUpdated();
+      this.notify();
+      return true;
+    }
+    return false;
+  }
+
+  public updateCustomListItemCount(listId: string, itemId: string, count: number): boolean {
+    const list = this.customLists.get(listId);
+    if (!list) return false;
+
+    if (count <= 0) {
+      return this.removeCardFromCustomList(listId, itemId);
+    }
+
+    const item = list.items.find(i => i.id === itemId);
+    if (!item) return false;
+
+    item.count = count;
+    list.updated_at = new Date().toISOString();
+    this.saveCustomLists();
+    this.touchUpdated();
+    this.notify();
+    return true;
+  }
+
+  public updateCustomListItemNotes(listId: string, itemId: string, notes: string): boolean {
+    const list = this.customLists.get(listId);
+    if (!list) return false;
+
+    const item = list.items.find(i => i.id === itemId);
+    if (!item) return false;
+
+    item.notes = notes;
+    list.updated_at = new Date().toISOString();
+    this.saveCustomLists();
+    this.touchUpdated();
+    this.notify();
+    return true;
   }
 
   public subscribe(fn: () => void): () => void {
@@ -1400,6 +1695,7 @@ class ArcaDatabase {
     return JSON.stringify({
       cards: Array.from(this.cards.values()),
       instances: Array.from(this.instances.values()),
+      custom_lists: Array.from(this.customLists.values()),
       history: this.history,
       settings: this.getSettings(),
       last_updated: this.lastUpdated,
@@ -1524,7 +1820,42 @@ class ArcaDatabase {
         this.saveHistory();
       }
 
-      // 4. Settings & Dynamic Units (gracefully accept older backups with original 9 units)
+      // 4. Custom Lists (backwards-compatible: restore from backup or keep safe defaults)
+      if (data.custom_lists && Array.isArray(data.custom_lists)) {
+        this.customLists.clear();
+        for (const rawList of data.custom_lists) {
+          if (!rawList || typeof rawList !== 'object' || !rawList.name) continue;
+          const listId = String(rawList.id || generateUUID());
+          const cleanItems: CustomListItem[] = [];
+          if (Array.isArray(rawList.items)) {
+            for (const item of rawList.items) {
+              if (!item || !item.card_name) continue;
+              cleanItems.push({
+                id: String(item.id || generateUUID()),
+                card_name: String(item.card_name).trim(),
+                oracle_id: item.oracle_id ? String(item.oracle_id) : undefined,
+                count: typeof item.count === 'number' && item.count > 0 ? item.count : 1,
+                notes: item.notes ? String(item.notes) : undefined,
+                added_at: item.added_at || new Date().toISOString()
+              });
+            }
+          }
+          this.customLists.set(listId, {
+            id: listId,
+            name: String(rawList.name).trim(),
+            description: rawList.description ? String(rawList.description) : undefined,
+            created_at: rawList.created_at || new Date().toISOString(),
+            updated_at: rawList.updated_at || new Date().toISOString(),
+            items: cleanItems
+          });
+        }
+        this.saveCustomLists();
+      } else if (this.customLists.size === 0) {
+        SEED_CUSTOM_LISTS.forEach(l => this.customLists.set(l.id, { ...l, items: [...l.items] }));
+        this.saveCustomLists();
+      }
+
+      // 5. Settings & Dynamic Units (gracefully accept older backups with original 9 units)
       const currentSettings = this.getSettings();
       const importedSettings = (data.settings && typeof data.settings === 'object') ? data.settings : {};
       const targetUnitCount = typeof importedSettings.unitCount === 'number' && importedSettings.unitCount > 0
@@ -1536,12 +1867,12 @@ class ArcaDatabase {
         unitCount: targetUnitCount
       });
 
-      // 5. Pre-import snapshot for instant rollback protection
+      // 6. Pre-import snapshot for instant rollback protection
       if (this.instances.size > 0) {
         this.saveSnapshot(`Backup before import (${this.instances.size} cards)`);
       }
 
-      // 6. Overwrite active instances with normalized collection
+      // 7. Overwrite active instances with normalized collection
       this.instances.clear();
       cleanInstances.forEach((inst: CardInstance) => this.instances.set(inst.instance_id, inst));
       this.saveInstances();
@@ -1561,11 +1892,14 @@ class ArcaDatabase {
     this.saveSnapshot('Auto snapshot before sample reset');
     this.cards.clear();
     this.instances.clear();
+    this.customLists.clear();
     this.history = [...INITIAL_HISTORY];
     SEED_CARDS.forEach(c => this.cards.set(c.oracle_id, c));
     SEED_INSTANCES.forEach(inst => this.instances.set(inst.instance_id, inst));
+    SEED_CUSTOM_LISTS.forEach(l => this.customLists.set(l.id, { ...l, items: [...l.items] }));
     this.saveCards();
     this.saveInstances();
+    this.saveCustomLists();
     this.saveHistory();
     this.notify();
   }

@@ -29,10 +29,23 @@ const SAMPLE_WANTS = `1 Sol Ring
 1 The One Ring
 1 Demonic Tutor`;
 
-export const PickPathRunner: React.FC = () => {
+interface PickPathRunnerProps {
+  pendingDecklist?: string;
+  onClearPendingDecklist?: () => void;
+}
+
+export const PickPathRunner: React.FC<PickPathRunnerProps> = ({ pendingDecklist, onClearPendingDecklist }) => {
   const [phase, setPhase] = useState<'setup' | 'running'>('setup');
   const [decklistText, setDecklistText] = useState('');
   const [route, setRoute] = useState<PickItem[]>([]);
+
+  useEffect(() => {
+    if (pendingDecklist) {
+      setDecklistText(pendingDecklist);
+      setPhase('setup');
+      if (onClearPendingDecklist) onClearPendingDecklist();
+    }
+  }, [pendingDecklist, onClearPendingDecklist]);
 
   // Reactive DB subscriptions
   const [instances, setInstances] = useState<CardInstance[]>(() => db.getAllInstances());

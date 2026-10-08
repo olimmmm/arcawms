@@ -3,6 +3,7 @@ import {
   Boxes, 
   MapPin, 
   ChevronLeft, 
+  ChevronRight,
   Layers, 
   Sparkles,
   ArrowRight,
@@ -14,9 +15,10 @@ import {
   Plus,
   Minus,
   Undo2,
-  ShoppingBag
+  ShoppingBag,
+  Bookmark
 } from 'lucide-react';
-import { CardInstance, ScryfallCard } from '../types';
+import { CardInstance, ScryfallCard, CustomList } from '../types';
 import { db, generateUUID } from '../services/db';
 import { formatLocationId, parseLocationId } from '../services/pickPath';
 import { getScryfallImageFallback, CARD_BACK_IMAGE } from '../services/scryfall';
@@ -72,12 +74,17 @@ export const SkeuomorphicViewer: React.FC = () => {
   // Reactive DB subscriptions
   const [instances, setInstances] = useState<CardInstance[]>(() => db.getAllInstances());
   const [cards, setCards] = useState<ScryfallCard[]>(() => db.getAllCards());
+  const [customLists, setCustomLists] = useState<CustomList[]>(() => db.getCustomLists());
+  const [listSubmenuOpenId, setListSubmenuOpenId] = useState<string | null>(null);
+  const [listToast, setListToast] = useState<{ message: string; onUndo?: () => void } | null>(null);
+  const listToastTimeoutRef = useRef<any>(null);
 
   useEffect(() => {
     return db.subscribe(() => {
       setInstances(db.getAllInstances());
       setCards(db.getAllCards());
       setUnitCount(db.getUnitCount());
+      setCustomLists(db.getCustomLists());
     });
   }, []);
 
@@ -182,7 +189,10 @@ export const SkeuomorphicViewer: React.FC = () => {
 
   // Close open card dropdown menu when clicking anywhere outside
   useEffect(() => {
-    const handleClickOutside = () => setCardMenuOpenId(null);
+    const handleClickOutside = () => {
+      setCardMenuOpenId(null);
+      setListSubmenuOpenId(null);
+    };
     window.addEventListener('click', handleClickOutside);
     return () => window.removeEventListener('click', handleClickOutside);
   }, []);
@@ -365,6 +375,48 @@ export const SkeuomorphicViewer: React.FC = () => {
     triggerHaptic('light');
     db.toggleForSale(inst.instance_id);
     setCardMenuOpenId(null);
+  };
+
+  const showListToast = (message: string, onUndo?: () => void) => {
+    if (listToastTimeoutRef.current) clearTimeout(listToastTimeoutRef.current);
+    setListToast({ message, onUndo });
+    listToastTimeoutRef.current = setTimeout(() => {
+      setListToast(null);
+    }, 4500);
+  };
+
+  const handleAddCardToList = (cardName: string, listId: string, listName: string) => {
+    playSound('success');
+    triggerHaptic('light');
+    const addedItem = db.addCardToCustomList(listId, cardName, 1);
+    setCardMenuOpenId(null);
+    setListSubmenuOpenId(null);
+    showListToast(`Added "${cardName}" to ${listName}`, () => {
+      if (addedItem) {
+        db.removeCardFromCustomList(listId, addedItem.id);
+        playSound('skip');
+        triggerHaptic('light');
+        setListToast(null);
+      }
+    });
+  };
+
+  const handleQuickCreateListAndAdd = (cardName: string) => {
+    const name = window.prompt('Enter new custom list name (e.g. EDH Wishlist, Binder):');
+    if (!name || !name.trim()) return;
+    playSound('click');
+    const newList = db.createCustomList(name.trim());
+    const addedItem = db.addCardToCustomList(newList.id, cardName, 1);
+    setCardMenuOpenId(null);
+    setListSubmenuOpenId(null);
+    showListToast(`Created "${newList.name}" & added "${cardName}"`, () => {
+      if (addedItem) {
+        db.removeCardFromCustomList(newList.id, addedItem.id);
+        playSound('skip');
+        triggerHaptic('light');
+        setListToast(null);
+      }
+    });
   };
 
   // Return proxy to Proxy Box from Decks/Brewing
@@ -881,6 +933,43 @@ export const SkeuomorphicViewer: React.FC = () => {
                                   <span>{inst.is_for_sale ? 'Remove from Sale' : 'Mark For Sale (eBay)'}</span>
                                 </span>
                               </button>
+
+                              <div className="border-t border-slate-800 my-1" />
+                              <button
+                                type="button"
+                                onClick={() => setListSubmenuOpenId(listSubmenuOpenId === inst.instance_id ? null : inst.instance_id)}
+                                className="w-full px-2.5 py-1.5 rounded-lg text-left flex items-center justify-between hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
+                              >
+                                <span className="flex items-center gap-1.5">
+                                  <Bookmark className="h-3.5 w-3.5 text-amber-400" />
+                                  <span>Add to List...</span>
+                                </span>
+                                <ChevronRight className={`h-3 w-3 text-slate-400 transition-transform ${listSubmenuOpenId === inst.instance_id ? 'rotate-90' : ''}`} />
+                              </button>
+
+                              {listSubmenuOpenId === inst.instance_id && (
+                                <div className="p-1 space-y-1 bg-slate-950/70 rounded-lg border border-slate-800 max-h-36 overflow-y-auto">
+                                  {customLists.map(list => (
+                                    <button
+                                      key={list.id}
+                                      type="button"
+                                      onClick={() => handleAddCardToList(inst.card_name, list.id, list.name)}
+                                      className="w-full px-2 py-1 rounded text-left flex items-center justify-between hover:bg-slate-800 text-slate-300 hover:text-white transition cursor-pointer text-[11px]"
+                                    >
+                                      <span className="truncate max-w-[100px]">{list.name}</span>
+                                      <span className="text-[9px] font-mono text-slate-500">{list.items.reduce((acc, i) => acc + i.count, 0)}</span>
+                                    </button>
+                                  ))}
+                                  <button
+                                    type="button"
+                                    onClick={() => handleQuickCreateListAndAdd(inst.card_name)}
+                                    className="w-full px-2 py-1 rounded text-left flex items-center gap-1 text-amber-400 hover:text-amber-300 hover:bg-slate-800 transition cursor-pointer text-[11px] font-semibold"
+                                  >
+                                    <Plus className="h-3 w-3" />
+                                    <span>+ New List</span>
+                                  </button>
+                                </div>
+                              )}
                             </div>
                           )}
                         </div>
@@ -1063,6 +1152,43 @@ export const SkeuomorphicViewer: React.FC = () => {
                                   <span>{inst.is_for_sale ? 'Remove from Sale' : 'Mark For Sale (eBay)'}</span>
                                 </span>
                               </button>
+
+                              <div className="border-t border-slate-800 my-1" />
+                              <button
+                                type="button"
+                                onClick={() => setListSubmenuOpenId(listSubmenuOpenId === inst.instance_id ? null : inst.instance_id)}
+                                className="w-full px-2.5 py-1.5 rounded-lg text-left flex items-center justify-between hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
+                              >
+                                <span className="flex items-center gap-1.5">
+                                  <Bookmark className="h-3.5 w-3.5 text-amber-400" />
+                                  <span>Add to List...</span>
+                                </span>
+                                <ChevronRight className={`h-3 w-3 text-slate-400 transition-transform ${listSubmenuOpenId === inst.instance_id ? 'rotate-90' : ''}`} />
+                              </button>
+
+                              {listSubmenuOpenId === inst.instance_id && (
+                                <div className="p-1 space-y-1 bg-slate-950/70 rounded-lg border border-slate-800 max-h-36 overflow-y-auto">
+                                  {customLists.map(list => (
+                                    <button
+                                      key={list.id}
+                                      type="button"
+                                      onClick={() => handleAddCardToList(inst.card_name, list.id, list.name)}
+                                      className="w-full px-2 py-1 rounded text-left flex items-center justify-between hover:bg-slate-800 text-slate-300 hover:text-white transition cursor-pointer text-[11px]"
+                                    >
+                                      <span className="truncate max-w-[100px]">{list.name}</span>
+                                      <span className="text-[9px] font-mono text-slate-500">{list.items.reduce((acc, i) => acc + i.count, 0)}</span>
+                                    </button>
+                                  ))}
+                                  <button
+                                    type="button"
+                                    onClick={() => handleQuickCreateListAndAdd(inst.card_name)}
+                                    className="w-full px-2 py-1 rounded text-left flex items-center gap-1 text-amber-400 hover:text-amber-300 hover:bg-slate-800 transition cursor-pointer text-[11px] font-semibold"
+                                  >
+                                    <Plus className="h-3 w-3" />
+                                    <span>+ New List</span>
+                                  </button>
+                                </div>
+                              )}
                             </div>
                           )}
                         </div>
@@ -1250,6 +1376,43 @@ export const SkeuomorphicViewer: React.FC = () => {
                                   <span>{inst.is_for_sale ? 'Remove from Sale' : 'Mark For Sale (eBay)'}</span>
                                 </span>
                               </button>
+
+                              <div className="border-t border-slate-800 my-1" />
+                              <button
+                                type="button"
+                                onClick={() => setListSubmenuOpenId(listSubmenuOpenId === inst.instance_id ? null : inst.instance_id)}
+                                className="w-full px-2.5 py-1.5 rounded-lg text-left flex items-center justify-between hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
+                              >
+                                <span className="flex items-center gap-1.5">
+                                  <Bookmark className="h-3.5 w-3.5 text-amber-400" />
+                                  <span>Add to List...</span>
+                                </span>
+                                <ChevronRight className={`h-3 w-3 text-slate-400 transition-transform ${listSubmenuOpenId === inst.instance_id ? 'rotate-90' : ''}`} />
+                              </button>
+
+                              {listSubmenuOpenId === inst.instance_id && (
+                                <div className="p-1 space-y-1 bg-slate-950/70 rounded-lg border border-slate-800 max-h-36 overflow-y-auto">
+                                  {customLists.map(list => (
+                                    <button
+                                      key={list.id}
+                                      type="button"
+                                      onClick={() => handleAddCardToList(inst.card_name, list.id, list.name)}
+                                      className="w-full px-2 py-1 rounded text-left flex items-center justify-between hover:bg-slate-800 text-slate-300 hover:text-white transition cursor-pointer text-[11px]"
+                                    >
+                                      <span className="truncate max-w-[100px]">{list.name}</span>
+                                      <span className="text-[9px] font-mono text-slate-500">{list.items.reduce((acc, i) => acc + i.count, 0)}</span>
+                                    </button>
+                                  ))}
+                                  <button
+                                    type="button"
+                                    onClick={() => handleQuickCreateListAndAdd(inst.card_name)}
+                                    className="w-full px-2 py-1 rounded text-left flex items-center gap-1 text-amber-400 hover:text-amber-300 hover:bg-slate-800 transition cursor-pointer text-[11px] font-semibold"
+                                  >
+                                    <Plus className="h-3 w-3" />
+                                    <span>+ New List</span>
+                                  </button>
+                                </div>
+                              )}
                             </div>
                           )}
                         </div>
@@ -1505,6 +1668,32 @@ export const SkeuomorphicViewer: React.FC = () => {
                 style={{ width: `${undoProgress}%` }}
               />
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* CUSTOM LISTS TOAST NOTIFICATION */}
+      {listToast && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 animate-in fade-in slide-in-from-bottom-4 duration-200">
+          <div className="bg-slate-900 border border-slate-700 text-white px-4 py-2.5 rounded-2xl shadow-2xl flex items-center gap-3 text-xs sm:text-sm font-semibold backdrop-blur-md">
+            <Bookmark className="h-4 w-4 text-amber-400 shrink-0" />
+            <span>{listToast.message}</span>
+            {listToast.onUndo && (
+              <button
+                type="button"
+                onClick={listToast.onUndo}
+                className="ml-2 px-2.5 py-1 rounded-lg bg-amber-500/20 text-amber-300 hover:bg-amber-500/30 text-xs font-bold transition cursor-pointer"
+              >
+                Undo
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setListToast(null)}
+              className="p-0.5 text-slate-400 hover:text-white rounded"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
           </div>
         </div>
       )}

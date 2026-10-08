@@ -13,9 +13,11 @@ import {
   Layers,
   ShoppingBag,
   Undo2,
-  ArrowUpDown
+  ArrowUpDown,
+  Bookmark,
+  ChevronRight
 } from 'lucide-react';
-import { CardInstance, ScryfallCard } from '../types';
+import { CardInstance, ScryfallCard, CustomList } from '../types';
 import { db } from '../services/db';
 import { 
   parseSyntaxQuery, 
@@ -211,6 +213,7 @@ export const SniperSearch: React.FC = () => {
 
   // Top-left card menu state & toast
   const [cardMenuOpenId, setCardMenuOpenId] = useState<string | null>(null);
+  const [listSubmenuOpenId, setListSubmenuOpenId] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [toastUndoAction, setToastUndoAction] = useState<(() => void) | null>(null);
 
@@ -223,16 +226,28 @@ export const SniperSearch: React.FC = () => {
     }, 4500);
   };
 
+  // Close open card dropdown menu when clicking anywhere outside
+  useEffect(() => {
+    const handleClickOutside = () => {
+      setCardMenuOpenId(null);
+      setListSubmenuOpenId(null);
+    };
+    window.addEventListener('click', handleClickOutside);
+    return () => window.removeEventListener('click', handleClickOutside);
+  }, []);
+
   // Reactive DB subscriptions
   const [instances, setInstances] = useState<CardInstance[]>(() => db.getAllInstances());
   const [cards, setCards] = useState<ScryfallCard[]>(() => db.getAllCards());
   const [unitCount, setUnitCount] = useState<number>(() => db.getUnitCount());
+  const [customLists, setCustomLists] = useState<CustomList[]>(() => db.getCustomLists());
 
   useEffect(() => {
     return db.subscribe(() => {
       setInstances(db.getAllInstances());
       setCards(db.getAllCards());
       setUnitCount(db.getUnitCount());
+      setCustomLists(db.getCustomLists());
     });
   }, []);
 
@@ -544,6 +559,39 @@ export const SniperSearch: React.FC = () => {
     showToast(`"${inst.card_name}" moved to Proxy Box`);
   };
 
+  // Add to custom list
+  const handleAddCardToList = (cardName: string, listId: string, listName: string, metadata?: ScryfallCard) => {
+    playSound('success');
+    triggerHaptic('light');
+    const addedItem = db.addCardToCustomList(listId, cardName, 1, metadata);
+    setCardMenuOpenId(null);
+    setListSubmenuOpenId(null);
+    showToast(`Added "${cardName}" to ${listName}`, () => {
+      if (addedItem) {
+        db.removeCardFromCustomList(listId, addedItem.id);
+        playSound('skip');
+        triggerHaptic('light');
+      }
+    });
+  };
+
+  const handleQuickCreateListAndAdd = (cardName: string, metadata?: ScryfallCard) => {
+    const name = window.prompt('Enter new custom list name (e.g. EDH Wishlist, Binder):');
+    if (!name || !name.trim()) return;
+    playSound('click');
+    const newList = db.createCustomList(name.trim());
+    const addedItem = db.addCardToCustomList(newList.id, cardName, 1, metadata);
+    setCardMenuOpenId(null);
+    setListSubmenuOpenId(null);
+    showToast(`Created "${newList.name}" & added "${cardName}"`, () => {
+      if (addedItem) {
+        db.removeCardFromCustomList(newList.id, addedItem.id);
+        playSound('skip');
+        triggerHaptic('light');
+      }
+    });
+  };
+
   return (
     <div className="max-w-4xl mx-auto px-4 sm:px-6 py-6 space-y-5">
       {/* Search Header */}
@@ -848,6 +896,43 @@ export const SniperSearch: React.FC = () => {
                               </div>
                             </div>
                           ))}
+                        </div>
+                      )}
+
+                      <div className="border-t border-slate-800 my-1" />
+                      <button
+                        type="button"
+                        onClick={() => setListSubmenuOpenId(listSubmenuOpenId === card.oracle_id ? null : card.oracle_id)}
+                        className="w-full px-2 py-1.5 rounded-lg text-left flex items-center justify-between hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
+                      >
+                        <span className="flex items-center gap-1.5">
+                          <Bookmark className="h-3.5 w-3.5 text-amber-400" />
+                          <span>Add to List...</span>
+                        </span>
+                        <ChevronRight className={`h-3 w-3 text-slate-400 transition-transform ${listSubmenuOpenId === card.oracle_id ? 'rotate-90' : ''}`} />
+                      </button>
+
+                      {listSubmenuOpenId === card.oracle_id && (
+                        <div className="p-1 space-y-1 bg-slate-950/70 rounded-lg border border-slate-800 max-h-36 overflow-y-auto">
+                          {customLists.map(list => (
+                            <button
+                              key={list.id}
+                              type="button"
+                              onClick={() => handleAddCardToList(card.name, list.id, list.name, card)}
+                              className="w-full px-2 py-1 rounded text-left flex items-center justify-between hover:bg-slate-800 text-slate-300 hover:text-white transition cursor-pointer text-[11px]"
+                            >
+                              <span className="truncate max-w-[100px]">{list.name}</span>
+                              <span className="text-[9px] font-mono text-slate-500">{list.items.reduce((acc, i) => acc + i.count, 0)}</span>
+                            </button>
+                          ))}
+                          <button
+                            type="button"
+                            onClick={() => handleQuickCreateListAndAdd(card.name, card)}
+                            className="w-full px-2 py-1 rounded text-left flex items-center gap-1 text-amber-400 hover:text-amber-300 hover:bg-slate-800 transition cursor-pointer text-[11px] font-semibold"
+                          >
+                            <Plus className="h-3 w-3" />
+                            <span>+ New List</span>
+                          </button>
                         </div>
                       )}
                     </div>
@@ -1165,6 +1250,43 @@ export const SniperSearch: React.FC = () => {
                                         <span>{inst.is_for_sale ? 'Remove from Sale' : 'Mark For Sale (eBay)'}</span>
                                       </span>
                                     </button>
+
+                                    <div className="border-t border-slate-800 my-1" />
+                                    <button
+                                      type="button"
+                                      onClick={() => setListSubmenuOpenId(listSubmenuOpenId === inst.instance_id ? null : inst.instance_id)}
+                                      className="w-full px-2 py-1.5 rounded-lg text-left flex items-center justify-between hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
+                                    >
+                                      <span className="flex items-center gap-1.5">
+                                        <Bookmark className="h-3.5 w-3.5 text-amber-400" />
+                                        <span>Add to List...</span>
+                                      </span>
+                                      <ChevronRight className={`h-3 w-3 text-slate-400 transition-transform ${listSubmenuOpenId === inst.instance_id ? 'rotate-90' : ''}`} />
+                                    </button>
+
+                                    {listSubmenuOpenId === inst.instance_id && (
+                                      <div className="p-1 space-y-1 bg-slate-950/70 rounded-lg border border-slate-800 max-h-36 overflow-y-auto">
+                                        {customLists.map(list => (
+                                          <button
+                                            key={list.id}
+                                            type="button"
+                                            onClick={() => handleAddCardToList(inst.card_name, list.id, list.name)}
+                                            className="w-full px-2 py-1 rounded text-left flex items-center justify-between hover:bg-slate-800 text-slate-300 hover:text-white transition cursor-pointer text-[11px]"
+                                          >
+                                            <span className="truncate max-w-[100px]">{list.name}</span>
+                                            <span className="text-[9px] font-mono text-slate-500">{list.items.reduce((acc, i) => acc + i.count, 0)}</span>
+                                          </button>
+                                        ))}
+                                        <button
+                                          type="button"
+                                          onClick={() => handleQuickCreateListAndAdd(inst.card_name)}
+                                          className="w-full px-2 py-1 rounded text-left flex items-center gap-1 text-amber-400 hover:text-amber-300 hover:bg-slate-800 transition cursor-pointer text-[11px] font-semibold"
+                                        >
+                                          <Plus className="h-3 w-3" />
+                                          <span>+ New List</span>
+                                        </button>
+                                      </div>
+                                    )}
                                   </div>
                                 )}
                               </div>

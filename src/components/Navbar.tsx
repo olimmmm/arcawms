@@ -1,10 +1,10 @@
 import React from 'react';
-import { Search, Compass, PlusCircle, Settings, Archive } from 'lucide-react';
+import { Search, Compass, PlusCircle, Settings, Archive, Bookmark } from 'lucide-react';
 import { InventoryStats } from '../types';
 
 interface NavbarProps {
-  activeTab: 'search' | 'pickpath' | 'cabinet' | 'ingest';
-  setActiveTab: (tab: 'search' | 'pickpath' | 'cabinet' | 'ingest') => void;
+  activeTab: 'search' | 'pickpath' | 'cabinet' | 'ingest' | 'lists';
+  setActiveTab: (tab: 'search' | 'pickpath' | 'cabinet' | 'ingest' | 'lists') => void;
   stats: InventoryStats;
   syncStatus: 'connected' | 'connecting' | 'disconnected' | 'error';
   onOpenSettings: () => void;
@@ -21,6 +21,7 @@ export const Navbar: React.FC<NavbarProps> = ({
     { id: 'search', label: 'Search', icon: Search },
     { id: 'pickpath', label: 'Pick-Path', icon: Compass },
     { id: 'cabinet', label: 'Cabinet', icon: Archive },
+    { id: 'lists', label: 'Lists', icon: Bookmark },
     { id: 'ingest', label: 'Batch Ingest', icon: PlusCircle }
   ] as const;
 

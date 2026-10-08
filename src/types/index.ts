@@ -69,3 +69,22 @@ export interface ActivityLogItem {
   instance_snapshot?: CardInstance;
   undone?: boolean;
 }
+
+export interface CustomListItem {
+  id: string;
+  card_name: string;
+  oracle_id?: string;
+  count: number;
+  notes?: string;
+  added_at: string;
+  card_metadata?: ScryfallCard;
+}
+
+export interface CustomList {
+  id: string;
+  name: string;
+  description?: string;
+  created_at: string;
+  updated_at: string;
+  items: CustomListItem[];
+}

@@ -261,6 +261,7 @@ class SyncClient {
     const payload = {
       instances: db.getAllInstances(),
       cards: db.getAllCards(),
+      custom_lists: db.getCustomLists(),
       history: db.getHistory(),
       settings: db.getSettings(),
       timestamp: db.getLastUpdated()
