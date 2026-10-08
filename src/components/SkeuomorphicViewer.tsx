@@ -874,24 +874,28 @@ export const SkeuomorphicViewer: React.FC = () => {
                   return (
                     <div
                       key={inst.instance_id}
-                      className={`bg-slate-950 border rounded-2xl overflow-hidden shadow-lg transition flex flex-col justify-between ${
+                      className={`bg-slate-950 border rounded-2xl shadow-lg transition flex flex-col justify-between relative ${
+                        cardMenuOpenId === inst.instance_id ? 'z-30 overflow-visible' : 'overflow-hidden'
+                      } ${
                         inst.is_for_sale ? 'border-for-sale' : 'border-slate-800 hover:border-amber-500/60'
                       }`}
                     >
                       {/* Card Image */}
-                      <div className="relative aspect-[5/7] bg-black overflow-hidden group">
-                        <img
-                          src={meta?.image_url_normal || getScryfallImageFallback(inst.card_name)}
-                          alt={inst.card_name}
-                          loading="lazy"
-                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
-                          onError={(e) => {
-                            e.currentTarget.src = CARD_BACK_IMAGE;
-                          }}
-                        />
+                      <div className="relative aspect-[5/7] bg-black rounded-t-2xl">
+                        <div className="w-full h-full overflow-hidden rounded-t-2xl group">
+                          <img
+                            src={meta?.image_url_normal || getScryfallImageFallback(inst.card_name)}
+                            alt={inst.card_name}
+                            loading="lazy"
+                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                            onError={(e) => {
+                              e.currentTarget.src = CARD_BACK_IMAGE;
+                            }}
+                          />
+                        </div>
 
                         {/* Top-Left `+` Menu Button */}
-                        <div className="absolute top-1.5 left-1.5 z-20">
+                        <div className="absolute top-1.5 left-1.5 z-40">
                           <button
                             type="button"
                             onClick={(e) => {
@@ -911,7 +915,7 @@ export const SkeuomorphicViewer: React.FC = () => {
                           {cardMenuOpenId === inst.instance_id && (
                             <div 
                               onClick={(e) => e.stopPropagation()} 
-                              className="absolute left-0 top-7 w-48 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl p-1.5 z-30 space-y-1 text-xs animate-in fade-in"
+                              className="absolute left-0 top-7 w-52 sm:w-56 bg-slate-900/98 border border-slate-700 rounded-xl shadow-2xl p-1.5 z-50 space-y-1 text-xs backdrop-blur-md animate-in fade-in"
                             >
                               <button
                                 type="button"
@@ -948,7 +952,7 @@ export const SkeuomorphicViewer: React.FC = () => {
                               </button>
 
                               {listSubmenuOpenId === inst.instance_id && (
-                                <div className="p-1 space-y-1 bg-slate-950/70 rounded-lg border border-slate-800 max-h-36 overflow-y-auto">
+                                <div className="p-1 space-y-1 bg-slate-950/70 rounded-lg border border-slate-800 max-h-48 overflow-y-auto">
                                   {customLists.map(list => (
                                     <button
                                       key={list.id}
@@ -956,7 +960,7 @@ export const SkeuomorphicViewer: React.FC = () => {
                                       onClick={() => handleAddCardToList(inst.card_name, list.id, list.name)}
                                       className="w-full px-2 py-1 rounded text-left flex items-center justify-between hover:bg-slate-800 text-slate-300 hover:text-white transition cursor-pointer text-[11px]"
                                     >
-                                      <span className="truncate max-w-[100px]">{list.name}</span>
+                                      <span className="truncate max-w-[130px]">{list.name}</span>
                                       <span className="text-[9px] font-mono text-slate-500">{list.items.reduce((acc, i) => acc + i.count, 0)}</span>
                                     </button>
                                   ))}
@@ -1091,26 +1095,30 @@ export const SkeuomorphicViewer: React.FC = () => {
                   return (
                     <div
                       key={inst.instance_id}
-                      className={`bg-slate-950 border rounded-2xl overflow-hidden shadow-lg transition flex flex-col justify-between ${
+                      className={`bg-slate-950 border rounded-2xl shadow-lg transition flex flex-col justify-between relative ${
+                        cardMenuOpenId === inst.instance_id ? 'z-30 overflow-visible' : 'overflow-hidden'
+                      } ${
                         inst.is_for_sale 
                           ? 'border-for-sale' 
                           : (inst.is_proxy ? 'border-proxy-theme' : 'border-slate-800 hover:border-blue-500/60')
                       }`}
                     >
                       {/* Card Image */}
-                      <div className="relative aspect-[5/7] bg-black overflow-hidden group">
-                        <img
-                          src={meta?.image_url_normal || getScryfallImageFallback(inst.card_name)}
-                          alt={inst.card_name}
-                          loading="lazy"
-                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
-                          onError={(e) => {
-                            e.currentTarget.src = CARD_BACK_IMAGE;
-                          }}
-                        />
+                      <div className="relative aspect-[5/7] bg-black rounded-t-2xl">
+                        <div className="w-full h-full overflow-hidden rounded-t-2xl group">
+                          <img
+                            src={meta?.image_url_normal || getScryfallImageFallback(inst.card_name)}
+                            alt={inst.card_name}
+                            loading="lazy"
+                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                            onError={(e) => {
+                              e.currentTarget.src = CARD_BACK_IMAGE;
+                            }}
+                          />
+                        </div>
 
                         {/* Top-Left `+` Menu Button */}
-                        <div className="absolute top-1.5 left-1.5 z-20">
+                        <div className="absolute top-1.5 left-1.5 z-40">
                           <button
                             type="button"
                             onClick={(e) => {
@@ -1130,7 +1138,7 @@ export const SkeuomorphicViewer: React.FC = () => {
                           {cardMenuOpenId === inst.instance_id && (
                             <div 
                               onClick={(e) => e.stopPropagation()} 
-                              className="absolute left-0 top-7 w-48 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl p-1.5 z-30 space-y-1 text-xs animate-in fade-in"
+                              className="absolute left-0 top-7 w-52 sm:w-56 bg-slate-900/98 border border-slate-700 rounded-xl shadow-2xl p-1.5 z-50 space-y-1 text-xs backdrop-blur-md animate-in fade-in"
                             >
                               <button
                                 type="button"
@@ -1167,7 +1175,7 @@ export const SkeuomorphicViewer: React.FC = () => {
                               </button>
 
                               {listSubmenuOpenId === inst.instance_id && (
-                                <div className="p-1 space-y-1 bg-slate-950/70 rounded-lg border border-slate-800 max-h-36 overflow-y-auto">
+                                <div className="p-1 space-y-1 bg-slate-950/70 rounded-lg border border-slate-800 max-h-48 overflow-y-auto">
                                   {customLists.map(list => (
                                     <button
                                       key={list.id}
@@ -1175,7 +1183,7 @@ export const SkeuomorphicViewer: React.FC = () => {
                                       onClick={() => handleAddCardToList(inst.card_name, list.id, list.name)}
                                       className="w-full px-2 py-1 rounded text-left flex items-center justify-between hover:bg-slate-800 text-slate-300 hover:text-white transition cursor-pointer text-[11px]"
                                     >
-                                      <span className="truncate max-w-[100px]">{list.name}</span>
+                                      <span className="truncate max-w-[130px]">{list.name}</span>
                                       <span className="text-[9px] font-mono text-slate-500">{list.items.reduce((acc, i) => acc + i.count, 0)}</span>
                                     </button>
                                   ))}
@@ -1317,24 +1325,28 @@ export const SkeuomorphicViewer: React.FC = () => {
                   return (
                     <div
                       key={inst.instance_id}
-                      className={`bg-slate-950 border rounded-2xl overflow-hidden shadow-lg transition flex flex-col justify-between ${
+                      className={`bg-slate-950 border rounded-2xl shadow-lg transition flex flex-col justify-between relative ${
+                        cardMenuOpenId === inst.instance_id ? 'z-30 overflow-visible' : 'overflow-hidden'
+                      } ${
                         inst.is_for_sale ? 'border-for-sale' : 'border-slate-800 hover:border-purple-500/60'
                       }`}
                     >
                       {/* Card Image */}
-                      <div className="relative aspect-[5/7] bg-black overflow-hidden group">
-                        <img
-                          src={meta?.image_url_normal || getScryfallImageFallback(inst.card_name)}
-                          alt={inst.card_name}
-                          loading="lazy"
-                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
-                          onError={(e) => {
-                            e.currentTarget.src = CARD_BACK_IMAGE;
-                          }}
-                        />
+                      <div className="relative aspect-[5/7] bg-black rounded-t-2xl">
+                        <div className="w-full h-full overflow-hidden rounded-t-2xl group">
+                          <img
+                            src={meta?.image_url_normal || getScryfallImageFallback(inst.card_name)}
+                            alt={inst.card_name}
+                            loading="lazy"
+                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                            onError={(e) => {
+                              e.currentTarget.src = CARD_BACK_IMAGE;
+                            }}
+                          />
+                        </div>
 
                         {/* Top-Left `+` Menu Button */}
-                        <div className="absolute top-1.5 left-1.5 z-20">
+                        <div className="absolute top-1.5 left-1.5 z-40">
                           <button
                             type="button"
                             onClick={(e) => {
@@ -1354,7 +1366,7 @@ export const SkeuomorphicViewer: React.FC = () => {
                           {cardMenuOpenId === inst.instance_id && (
                             <div 
                               onClick={(e) => e.stopPropagation()} 
-                              className="absolute left-0 top-7 w-48 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl p-1.5 z-30 space-y-1 text-xs animate-in fade-in"
+                              className="absolute left-0 top-7 w-52 sm:w-56 bg-slate-900/98 border border-slate-700 rounded-xl shadow-2xl p-1.5 z-50 space-y-1 text-xs backdrop-blur-md animate-in fade-in"
                             >
                               <button
                                 type="button"
@@ -1391,7 +1403,7 @@ export const SkeuomorphicViewer: React.FC = () => {
                               </button>
 
                               {listSubmenuOpenId === inst.instance_id && (
-                                <div className="p-1 space-y-1 bg-slate-950/70 rounded-lg border border-slate-800 max-h-36 overflow-y-auto">
+                                <div className="p-1 space-y-1 bg-slate-950/70 rounded-lg border border-slate-800 max-h-48 overflow-y-auto">
                                   {customLists.map(list => (
                                     <button
                                       key={list.id}
@@ -1399,7 +1411,7 @@ export const SkeuomorphicViewer: React.FC = () => {
                                       onClick={() => handleAddCardToList(inst.card_name, list.id, list.name)}
                                       className="w-full px-2 py-1 rounded text-left flex items-center justify-between hover:bg-slate-800 text-slate-300 hover:text-white transition cursor-pointer text-[11px]"
                                     >
-                                      <span className="truncate max-w-[100px]">{list.name}</span>
+                                      <span className="truncate max-w-[130px]">{list.name}</span>
                                       <span className="text-[9px] font-mono text-slate-500">{list.items.reduce((acc, i) => acc + i.count, 0)}</span>
                                     </button>
                                   ))}

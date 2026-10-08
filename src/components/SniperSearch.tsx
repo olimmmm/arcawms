@@ -766,32 +766,51 @@ export const SniperSearch: React.FC = () => {
           return (
             <div
               key={card.oracle_id}
-              className={`bg-slate-900 rounded-2xl p-4 sm:p-5 shadow-lg flex flex-col sm:flex-row gap-4 sm:gap-5 transition-all ${
+              className={`bg-slate-900 rounded-2xl p-4 sm:p-5 shadow-lg flex flex-col sm:flex-row gap-4 sm:gap-5 transition-all relative ${
+                cardMenuOpenId === card.oracle_id ? 'z-30' : 'z-0'
+              } ${
                 cardHasForSale
                   ? 'border-2 border-red-500/80 shadow-[0_0_15px_rgba(239,68,68,0.25)]'
                   : 'border border-slate-800'
               }`}
             >
-              {/* Reliable Card Image with Automatic Fallback & Top-Left '+' Menu */}
-              <div className={`relative w-24 sm:w-28 shrink-0 rounded-xl overflow-hidden bg-slate-950 self-start shadow transition-all ${
-                cardHasForSale
-                  ? 'border-for-sale'
-                  : cardHasBrewProxy
-                  ? 'border-proxy-theme'
-                  : 'border border-slate-800'
-              }`}>
-                <img
-                  src={card.image_url_normal || getScryfallImageFallback(card.name)}
-                  alt={card.name}
-                  loading="lazy"
-                  className="w-full h-auto object-cover"
-                  onError={(e) => {
-                    e.currentTarget.src = CARD_BACK_IMAGE;
-                  }}
-                />
+              {/* Reliable Card Image with Automatic Fallback & Floating Top-Left '+' Menu */}
+              <div className={`relative w-24 sm:w-28 shrink-0 self-start ${cardMenuOpenId === card.oracle_id ? 'z-40' : 'z-10'}`}>
+                {/* Visual Image Box (maintains rounded corners without clipping menu popup) */}
+                <div className={`relative w-full rounded-xl overflow-hidden bg-slate-950 shadow transition-all ${
+                  cardHasForSale
+                    ? 'border-for-sale'
+                    : cardHasBrewProxy
+                    ? 'border-proxy-theme'
+                    : 'border border-slate-800'
+                }`}>
+                  <img
+                    src={card.image_url_normal || getScryfallImageFallback(card.name)}
+                    alt={card.name}
+                    loading="lazy"
+                    className="w-full h-auto object-cover block"
+                    onError={(e) => {
+                      e.currentTarget.src = CARD_BACK_IMAGE;
+                    }}
+                  />
 
-                {/* Top-Left `+` Menu Button */}
-                <div className="absolute top-1.5 left-1.5 z-20">
+                  {/* Status Badges Overlay on Image */}
+                  <div className="absolute top-1.5 right-1.5 flex flex-col items-end gap-1 pointer-events-none">
+                    {cardHasForSale && (
+                      <span className="px-1.5 py-0.5 rounded bg-rose-600/90 text-white font-mono font-black text-[9px] shadow uppercase tracking-wider">
+                        FOR SALE
+                      </span>
+                    )}
+                    {cardHasBrewProxy && !cardHasForSale && (
+                      <span className="px-1.5 py-0.5 rounded bg-purple-600/90 text-white font-mono font-black text-[9px] shadow uppercase tracking-wider">
+                        PROXY
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Top-Left `+` Menu Button & Unclipped Floating Dropdown Menu */}
+                <div className="absolute top-1.5 left-1.5 z-50">
                   <button
                     type="button"
                     onClick={(e) => {
@@ -811,7 +830,7 @@ export const SniperSearch: React.FC = () => {
                   {cardMenuOpenId === card.oracle_id && (
                     <div
                       onClick={(e) => e.stopPropagation()}
-                      className="absolute left-0 top-7 w-52 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl p-2 z-30 space-y-1 text-xs animate-in fade-in"
+                      className="absolute left-0 top-7 w-60 sm:w-64 bg-slate-900/98 border border-slate-700 rounded-xl shadow-2xl p-2 z-50 space-y-1 text-xs backdrop-blur-md animate-in fade-in"
                     >
                       {cardInstances.length === 0 ? (
                         <div className="space-y-1">
@@ -913,7 +932,7 @@ export const SniperSearch: React.FC = () => {
                       </button>
 
                       {listSubmenuOpenId === card.oracle_id && (
-                        <div className="p-1 space-y-1 bg-slate-950/70 rounded-lg border border-slate-800 max-h-36 overflow-y-auto">
+                        <div className="p-1 space-y-1 bg-slate-950/70 rounded-lg border border-slate-800 max-h-48 overflow-y-auto">
                           {customLists.map(list => (
                             <button
                               key={list.id}
@@ -921,7 +940,7 @@ export const SniperSearch: React.FC = () => {
                               onClick={() => handleAddCardToList(card.name, list.id, list.name, card)}
                               className="w-full px-2 py-1 rounded text-left flex items-center justify-between hover:bg-slate-800 text-slate-300 hover:text-white transition cursor-pointer text-[11px]"
                             >
-                              <span className="truncate max-w-[100px]">{list.name}</span>
+                              <span className="truncate max-w-[130px]">{list.name}</span>
                               <span className="text-[9px] font-mono text-slate-500">{list.items.reduce((acc, i) => acc + i.count, 0)}</span>
                             </button>
                           ))}
@@ -936,20 +955,6 @@ export const SniperSearch: React.FC = () => {
                         </div>
                       )}
                     </div>
-                  )}
-                </div>
-
-                {/* Status Badges Overlay on Image */}
-                <div className="absolute top-1.5 right-1.5 flex flex-col items-end gap-1 pointer-events-none">
-                  {cardHasForSale && (
-                    <span className="px-1.5 py-0.5 rounded bg-rose-600/90 text-white font-mono font-black text-[9px] shadow uppercase tracking-wider">
-                      FOR SALE
-                    </span>
-                  )}
-                  {cardHasBrewProxy && !cardHasForSale && (
-                    <span className="px-1.5 py-0.5 rounded bg-purple-600/90 text-white font-mono font-black text-[9px] shadow uppercase tracking-wider">
-                      PROXY
-                    </span>
                   )}
                 </div>
               </div>
@@ -1045,7 +1050,7 @@ export const SniperSearch: React.FC = () => {
                         return (
                           <div
                             key={inst.instance_id}
-                            className={`flex flex-col sm:flex-row sm:items-center justify-between p-2.5 rounded-xl border gap-2 text-xs transition relative ${borderClass}`}
+                            className={`flex flex-col sm:flex-row sm:items-center justify-between p-2.5 rounded-xl border gap-2 text-xs transition relative ${cardMenuOpenId === inst.instance_id ? 'z-30' : 'z-0'} ${borderClass}`}
                           >
                             <div className="flex flex-wrap items-center gap-2">
                               {isInChaos ? (
@@ -1228,7 +1233,7 @@ export const SniperSearch: React.FC = () => {
                                 {cardMenuOpenId === inst.instance_id && (
                                   <div
                                     onClick={(e) => e.stopPropagation()}
-                                    className="absolute right-0 top-8 w-48 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl p-1.5 z-30 space-y-1 text-xs animate-in fade-in"
+                                    className="absolute right-0 top-8 w-52 sm:w-56 bg-slate-900/98 border border-slate-700 rounded-xl shadow-2xl p-1.5 z-50 space-y-1 text-xs backdrop-blur-md animate-in fade-in"
                                   >
                                     <button
                                       type="button"
@@ -1265,7 +1270,7 @@ export const SniperSearch: React.FC = () => {
                                     </button>
 
                                     {listSubmenuOpenId === inst.instance_id && (
-                                      <div className="p-1 space-y-1 bg-slate-950/70 rounded-lg border border-slate-800 max-h-36 overflow-y-auto">
+                                      <div className="p-1 space-y-1 bg-slate-950/70 rounded-lg border border-slate-800 max-h-48 overflow-y-auto">
                                         {customLists.map(list => (
                                           <button
                                             key={list.id}
@@ -1273,7 +1278,7 @@ export const SniperSearch: React.FC = () => {
                                             onClick={() => handleAddCardToList(inst.card_name, list.id, list.name)}
                                             className="w-full px-2 py-1 rounded text-left flex items-center justify-between hover:bg-slate-800 text-slate-300 hover:text-white transition cursor-pointer text-[11px]"
                                           >
-                                            <span className="truncate max-w-[100px]">{list.name}</span>
+                                            <span className="truncate max-w-[130px]">{list.name}</span>
                                             <span className="text-[9px] font-mono text-slate-500">{list.items.reduce((acc, i) => acc + i.count, 0)}</span>
                                           </button>
                                         ))}
