@@ -29,6 +29,7 @@ type IngestMode = 'new_to_chaos' | 'new_to_brewing' | 'brewing_to_chaos';
 export const IngestEngine: React.FC = () => {
   // 3-way Ingest Mode
   const [mode, setMode] = useState<IngestMode>('new_to_chaos');
+  const [importAsProxies, setImportAsProxies] = useState<boolean>(false);
 
   // Smart initial batch location: first Unit & Drawer with strictly fewer than 12 batches
   const initialLoc = useMemo(() => {
@@ -154,7 +155,33 @@ export const IngestEngine: React.FC = () => {
         db.upsertCard(meta);
       }
 
-      if (mode === 'new_to_chaos') {
+      if (importAsProxies) {
+        // Enforce Proxy Rule: Storage Units CANNOT contain proxies!
+        if (mode === 'new_to_brewing') {
+          for (let i = 0; i < item.count; i++) {
+            db.createInstance({
+              oracle_id: meta.oracle_id,
+              card_name: meta.name,
+              state: 'B',
+              location_id: null,
+              is_proxy: true
+            });
+            newlyCreated++;
+          }
+        } else {
+          // Ingest directly into offline Proxy Box (standard storage units prevented)
+          for (let i = 0; i < item.count; i++) {
+            db.createInstance({
+              oracle_id: meta.oracle_id,
+              card_name: meta.name,
+              state: 'P',
+              location_id: 'Proxy Box',
+              is_proxy: true
+            });
+            newlyCreated++;
+          }
+        }
+      } else if (mode === 'new_to_chaos') {
         // Mode 1: New -> Chaos Drawers
         for (let i = 0; i < item.count; i++) {
           db.createInstance({
@@ -214,7 +241,13 @@ export const IngestEngine: React.FC = () => {
       setBatchIndex(effectiveBatchIndex);
     }
 
-    if (mode === 'new_to_chaos') {
+    if (importAsProxies) {
+      if (mode === 'new_to_brewing') {
+        setSuccessMessage(`Added ${newlyCreated} proxy cards directly to Brewing & Decks pool!`);
+      } else {
+        setSuccessMessage(`Ingested ${newlyCreated} proxy cards into Proxy Box (£0 value, units protected)!`);
+      }
+    } else if (mode === 'new_to_chaos') {
       setSuccessMessage(`Ingested ${newlyCreated} new cards into Batch ${currentCoordinate}!`);
       const nextSmart = getSmartDefaultBatchLocation(db.getAllInstances(), db.getUnitCount());
       setUnit(nextSmart.unit);
@@ -254,30 +287,77 @@ export const IngestEngine: React.FC = () => {
 
   return (
     <div className="max-w-4xl mx-auto px-4 sm:px-6 py-6 space-y-6">
-      {/* 3-Way Mode Switcher: New -> Chaos | New -> Brewing | Brewing -> Chaos */}
+      {/* Import as Proxies Checkbox & Storage Rule Protection */}
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <label className="flex items-center gap-3 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={importAsProxies}
+            onChange={(e) => {
+              const val = e.target.checked;
+              setImportAsProxies(val);
+              playSound('click');
+              if (val && mode === 'brewing_to_chaos') {
+                setMode('new_to_chaos');
+              }
+            }}
+            className="h-5 w-5 rounded border-slate-700 bg-slate-950 text-purple-600 focus:ring-purple-500 focus:ring-offset-slate-900 cursor-pointer"
+          />
+          <div>
+            <span className="font-bold text-sm text-white flex items-center gap-2">
+              <Sparkles className="h-4 w-4 text-purple-400" />
+              <span>Import as Proxies</span>
+            </span>
+            <p className="text-xs text-slate-400 mt-0.5">
+              Flags cards as £0 proxies. Prevents storing into standard units (directed to Proxy Box or Brewing).
+            </p>
+          </div>
+        </label>
+
+        {importAsProxies && (
+          <span className="px-3 py-1 rounded-full bg-purple-500/20 border border-purple-500/40 text-purple-300 font-mono text-xs font-bold self-start sm:self-auto">
+            Standard Units Disabled
+          </span>
+        )}
+      </div>
+
+      {/* Mode Switcher: New -> Chaos / Proxy Box | New -> Brewing | Brewing -> Chaos */}
       <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3 shadow-xl space-y-2">
         <label className="text-[11px] font-mono font-bold uppercase text-slate-400 block px-1">
           IMPORT DESTINATION & WORKFLOW:
         </label>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-          {/* Option 1: New -> Chaos */}
+          {/* Option 1: New -> Chaos OR New -> Proxy Box */}
           <button
             onClick={() => { setMode('new_to_chaos'); playSound('click'); }}
             className={`p-3 rounded-xl border text-left transition flex flex-col justify-between ${
               mode === 'new_to_chaos'
-                ? 'bg-theme-subtle border-theme-primary text-white shadow'
+                ? (importAsProxies ? 'bg-purple-950/40 border-purple-500 text-white shadow' : 'bg-theme-subtle border-theme-primary text-white shadow')
                 : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:text-white hover:bg-slate-800/50'
             }`}
           >
             <div className="flex items-center justify-between">
               <span className="font-bold text-xs uppercase font-mono tracking-wider flex items-center gap-1.5">
-                <PlusCircle className="h-4 w-4 text-theme-primary" />
-                <span>New ➔ Chaos</span>
+                {importAsProxies ? (
+                  <>
+                    <Sparkles className="h-4 w-4 text-purple-400" />
+                    <span>New ➔ Proxy Box</span>
+                  </>
+                ) : (
+                  <>
+                    <PlusCircle className="h-4 w-4 text-theme-primary" />
+                    <span>New ➔ Chaos</span>
+                  </>
+                )}
               </span>
-              {mode === 'new_to_chaos' && <Check className="h-4 w-4 text-theme-primary" />}
+              {mode === 'new_to_chaos' && (
+                <Check className={`h-4 w-4 ${importAsProxies ? 'text-purple-400' : 'text-theme-primary'}`} />
+              )}
             </div>
             <p className="text-[11px] text-slate-400 mt-1">
-              Add new cards directly into physical chaos drawer batch.
+              {importAsProxies 
+                ? 'Add new proxy cards directly into offline Proxy Box.' 
+                : 'Add new cards directly into physical chaos drawer batch.'}
             </p>
           </button>
 
@@ -298,15 +378,25 @@ export const IngestEngine: React.FC = () => {
               {mode === 'new_to_brewing' && <Check className="h-4 w-4 text-blue-400" />}
             </div>
             <p className="text-[11px] text-slate-400 mt-1">
-              Add new cards directly into active brewing trays & decks.
+              {importAsProxies
+                ? 'Add new proxy cards directly into active brewing trays & decks.'
+                : 'Add new cards directly into active brewing trays & decks.'}
             </p>
           </button>
 
-          {/* Option 3: Brewing -> Chaos */}
+          {/* Option 3: Brewing -> Chaos (Disabled for Proxies) */}
           <button
-            onClick={() => { setMode('brewing_to_chaos'); playSound('click'); }}
+            disabled={importAsProxies}
+            onClick={() => { 
+              if (!importAsProxies) {
+                setMode('brewing_to_chaos'); 
+                playSound('click'); 
+              }
+            }}
             className={`p-3 rounded-xl border text-left transition flex flex-col justify-between ${
-              mode === 'brewing_to_chaos'
+              importAsProxies
+                ? 'opacity-40 cursor-not-allowed bg-slate-950/40 border-slate-900 text-slate-600'
+                : mode === 'brewing_to_chaos'
                 ? 'bg-emerald-950/40 border-emerald-500 text-white shadow'
                 : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:text-white hover:bg-slate-800/50'
             }`}
@@ -316,17 +406,29 @@ export const IngestEngine: React.FC = () => {
                 <RotateCcw className="h-4 w-4 text-emerald-400" />
                 <span>Brewing ➔ Chaos</span>
               </span>
-              {mode === 'brewing_to_chaos' && <Check className="h-4 w-4 text-emerald-400" />}
+              {mode === 'brewing_to_chaos' && !importAsProxies && <Check className="h-4 w-4 text-emerald-400" />}
             </div>
             <p className="text-[11px] text-slate-400 mt-1">
-              Return desleeved cards from decks back into drawer batches.
+              {importAsProxies
+                ? 'Units cannot contain proxies (use Proxy Box instead).'
+                : 'Return desleeved cards from decks back into drawer batches.'}
             </p>
           </button>
         </div>
       </div>
 
-      {/* Target Drawer Coordinate Selector (Shown for New -> Chaos & Brewing -> Chaos) */}
-      {mode !== 'new_to_brewing' ? (
+      {/* Target Storage Location Indicator or Drawer Coordinate Selector */}
+      {importAsProxies ? (
+        <div className="bg-slate-900 border border-purple-900/50 rounded-2xl p-5 shadow-xl space-y-2">
+          <div className="flex items-center gap-2 text-purple-400 font-mono text-xs font-bold uppercase">
+            <Sparkles className="h-4 w-4" />
+            <span>TARGET STORAGE: {mode === 'new_to_brewing' ? 'Active Decks & Brewing Pool' : 'Offline Proxy Box'}</span>
+          </div>
+          <p className="text-xs text-slate-300">
+            Storage units cannot contain proxies. {mode === 'new_to_brewing' ? 'Cards will be added directly into your diffuse brewing pool.' : 'Cards will be securely indexed into your offline Proxy Box at £0 fixed valuation.'}
+          </p>
+        </div>
+      ) : mode !== 'new_to_brewing' ? (
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>

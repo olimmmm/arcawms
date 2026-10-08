@@ -46,6 +46,12 @@ export const Navbar: React.FC<NavbarProps> = ({
             <span><strong className="text-theme-primary">{stats.inChaosCount}</strong> in Drawers</span>
             <span className="text-slate-700">•</span>
             <span><strong className="text-blue-400">{stats.inDecksCount}</strong> in Decks</span>
+            {typeof stats.proxyCount === 'number' && stats.proxyCount > 0 && (
+              <>
+                <span className="text-slate-700">•</span>
+                <span><strong className="text-purple-400">{stats.proxyCount}</strong> Proxies</span>
+              </>
+            )}
             <span className="text-slate-700 hidden sm:inline">•</span>
             <span className="text-emerald-400 font-bold hidden sm:inline">€{stats.totalEurValue.toFixed(2)}</span>
           </div>

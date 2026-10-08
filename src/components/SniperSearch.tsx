@@ -207,6 +207,18 @@ export const SniperSearch: React.FC = () => {
   const [addUnit, setAddUnit] = useState(1);
   const [addDrawer, setAddDrawer] = useState<'A' | 'B' | 'C'>('A');
   const [addBatch, setAddBatch] = useState<number | ''>(1);
+  const [addAsProxy, setAddAsProxy] = useState<boolean>(false);
+
+  // Top-left card menu state & toast
+  const [cardMenuOpenId, setCardMenuOpenId] = useState<string | null>(null);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  const showToast = (msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => {
+      setToastMessage(prev => (prev === msg ? null : prev));
+    }, 3500);
+  };
 
   // Reactive DB subscriptions
   const [instances, setInstances] = useState<CardInstance[]>(() => db.getAllInstances());
@@ -444,30 +456,82 @@ export const SniperSearch: React.FC = () => {
   };
 
   // Open Quick Add with smart default batch location (< 12 non-empty batches)
-  const handleOpenQuickAdd = (card: ScryfallCard) => {
+  const handleOpenQuickAdd = (card: ScryfallCard, defaultProxy = false) => {
     playSound('click');
     const smart = getSmartDefaultBatchLocation(db.getAllInstances(), db.getUnitCount());
     setAddUnit(smart.unit);
     setAddDrawer(smart.drawer);
     setAddBatch(smart.batchIndex);
+    setAddAsProxy(defaultProxy);
     setQuickAddCard(card);
   };
 
-  // Add new physical copy
+  // Add new physical copy (standard storage drawer or proxy box)
   const handleConfirmQuickAdd = () => {
     if (!quickAddCard) return;
     playSound('success');
     triggerHaptic('medium');
-    const effBatch = typeof addBatch === 'number' && addBatch >= 1 ? addBatch : 1;
-    const locId = formatLocationId(addUnit, addDrawer, effBatch);
     db.upsertCard(quickAddCard);
-    db.createInstance({
-      oracle_id: quickAddCard.oracle_id,
-      card_name: quickAddCard.name,
-      state: 'A',
-      location_id: locId
-    });
+
+    if (addAsProxy) {
+      db.createInstance({
+        oracle_id: quickAddCard.oracle_id,
+        card_name: quickAddCard.name,
+        state: 'P',
+        location_id: 'Proxy Box',
+        is_proxy: true,
+      });
+      showToast(`Added proxy of "${quickAddCard.name}" to Offline Proxy Box`);
+    } else {
+      const effBatch = typeof addBatch === 'number' && addBatch >= 1 ? addBatch : 1;
+      const locId = formatLocationId(addUnit, addDrawer, effBatch);
+      db.createInstance({
+        oracle_id: quickAddCard.oracle_id,
+        card_name: quickAddCard.name,
+        state: 'A',
+        location_id: locId,
+        is_proxy: false,
+      });
+      showToast(`Added copy of "${quickAddCard.name}" to ${locId}`);
+    }
     setQuickAddCard(null);
+  };
+
+  // Toggle Proxy status on card
+  const handleToggleProxy = (inst: CardInstance) => {
+    playSound('click');
+    triggerHaptic('light');
+    const res = db.toggleProxy(inst.instance_id);
+    setCardMenuOpenId(null);
+    if (res.relocatedToProxyBox) {
+      showToast(`Marked "${inst.card_name}" as Proxy ➔ relocated to Proxy Box`);
+    } else if (res.is_proxy) {
+      showToast(`Marked "${inst.card_name}" as Proxy`);
+    } else {
+      showToast(`Marked "${inst.card_name}" as Real Card`);
+    }
+  };
+
+  // Toggle For Sale status on card (red border)
+  const handleToggleForSale = (inst: CardInstance) => {
+    playSound('click');
+    triggerHaptic('light');
+    const isForSale = db.toggleForSale(inst.instance_id);
+    setCardMenuOpenId(null);
+    if (isForSale) {
+      showToast(`"${inst.card_name}" marked FOR SALE (Red Border active)`);
+    } else {
+      showToast(`"${inst.card_name}" removed from sale`);
+    }
+  };
+
+  // Move proxy card back into Proxy Box from Decks/Brewing
+  const handleMoveToProxyBox = (inst: CardInstance) => {
+    playSound('pull');
+    triggerHaptic('medium');
+    db.returnToProxyBox(inst.instance_id);
+    setCardMenuOpenId(null);
+    showToast(`"${inst.card_name}" moved to Proxy Box`);
   };
 
   return (
@@ -638,13 +702,26 @@ export const SniperSearch: React.FC = () => {
             r => r.oracle_id === card.oracle_id || r.card_name.trim().toLowerCase() === card.name.trim().toLowerCase()
           );
 
+          const cardHasForSale = cardInstances.some(i => i.is_for_sale);
+          const cardHasBrewProxy = cardInstances.some(i => i.is_proxy && i.state === 'B');
+
           return (
             <div
               key={card.oracle_id}
-              className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-lg flex flex-col sm:flex-row gap-4 sm:gap-5"
+              className={`bg-slate-900 rounded-2xl p-4 sm:p-5 shadow-lg flex flex-col sm:flex-row gap-4 sm:gap-5 transition-all ${
+                cardHasForSale
+                  ? 'border-2 border-red-500/80 shadow-[0_0_15px_rgba(239,68,68,0.25)]'
+                  : 'border border-slate-800'
+              }`}
             >
-              {/* Reliable Card Image with Automatic Fallback */}
-              <div className="w-24 sm:w-28 shrink-0 rounded-xl overflow-hidden border border-slate-800 bg-slate-950 self-start shadow">
+              {/* Reliable Card Image with Automatic Fallback & Top-Left '+' Menu */}
+              <div className={`relative w-24 sm:w-28 shrink-0 rounded-xl overflow-hidden bg-slate-950 self-start shadow transition-all ${
+                cardHasForSale
+                  ? 'border-for-sale'
+                  : cardHasBrewProxy
+                  ? 'border-proxy-theme'
+                  : 'border border-slate-800'
+              }`}>
                 <img
                   src={card.image_url_normal || getScryfallImageFallback(card.name)}
                   alt={card.name}
@@ -654,6 +731,132 @@ export const SniperSearch: React.FC = () => {
                     e.currentTarget.src = CARD_BACK_IMAGE;
                   }}
                 />
+
+                {/* Top-Left `+` Menu Button */}
+                <div className="absolute top-1.5 left-1.5 z-20">
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setCardMenuOpenId(cardMenuOpenId === card.oracle_id ? null : card.oracle_id);
+                    }}
+                    className={`h-6 w-6 rounded-full flex items-center justify-center transition shadow-lg cursor-pointer ${
+                      cardMenuOpenId === card.oracle_id
+                        ? 'bg-amber-500 text-slate-950 font-black ring-2 ring-amber-300'
+                        : 'bg-slate-950/85 hover:bg-slate-900 text-white border border-slate-700/80 hover:border-amber-400'
+                    }`}
+                    title="Card options menu"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                  </button>
+
+                  {cardMenuOpenId === card.oracle_id && (
+                    <div
+                      onClick={(e) => e.stopPropagation()}
+                      className="absolute left-0 top-7 w-52 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl p-2 z-30 space-y-1 text-xs animate-in fade-in"
+                    >
+                      {cardInstances.length === 0 ? (
+                        <div className="space-y-1">
+                          <div className="text-[10px] text-slate-400 font-mono px-2 py-0.5 font-bold">ADD TO COLLECTION</div>
+                          <button
+                            type="button"
+                            onClick={() => { setCardMenuOpenId(null); handleOpenQuickAdd(card, false); }}
+                            className="w-full px-2 py-1.5 rounded-lg text-left flex items-center gap-1.5 hover:bg-slate-800 text-slate-200 cursor-pointer"
+                          >
+                            <Plus className="h-3.5 w-3.5 text-amber-400" />
+                            <span>+ Add Real Copy</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => { setCardMenuOpenId(null); handleOpenQuickAdd(card, true); }}
+                            className="w-full px-2 py-1.5 rounded-lg text-left flex items-center gap-1.5 hover:bg-slate-800 text-purple-300 cursor-pointer"
+                          >
+                            <Sparkles className="h-3.5 w-3.5 text-purple-400" />
+                            <span>+ Add Proxy (to Proxy Box)</span>
+                          </button>
+                        </div>
+                      ) : cardInstances.length === 1 ? (
+                        <div className="space-y-1">
+                          <div className="text-[10px] text-slate-400 font-mono px-2 py-0.5 font-bold">
+                            CARD STATUS
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleToggleProxy(cardInstances[0])}
+                            className="w-full px-2 py-1.5 rounded-lg text-left flex items-center justify-between hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
+                          >
+                            <span className="flex items-center gap-1.5">
+                              <Sparkles className="h-3.5 w-3.5 text-purple-400" />
+                              <span>{cardInstances[0].is_proxy ? 'Mark as Real Card' : 'Mark as Proxy'}</span>
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleToggleForSale(cardInstances[0])}
+                            className="w-full px-2 py-1.5 rounded-lg text-left flex items-center justify-between hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
+                          >
+                            <span className="flex items-center gap-1.5">
+                              <ShoppingBag className="h-3.5 w-3.5 text-rose-400" />
+                              <span>{cardInstances[0].is_for_sale ? 'Remove from Sale' : 'Mark For Sale (eBay)'}</span>
+                            </span>
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="space-y-1.5 max-h-56 overflow-y-auto">
+                          <div className="text-[10px] text-slate-400 font-mono px-2 py-0.5 font-bold">
+                            MANAGE COPIES ({cardInstances.length})
+                          </div>
+                          {cardInstances.map((inst, cIdx) => (
+                            <div key={inst.instance_id} className="p-1.5 rounded bg-slate-950/60 border border-slate-800 space-y-1">
+                              <div className="text-[10px] text-amber-400 font-mono font-bold flex justify-between">
+                                <span>Copy #{cIdx + 1}</span>
+                                <span className="text-slate-400 truncate max-w-[90px]">{inst.location_id || (inst.state === 'B' ? 'Brewing' : 'Proxy Box')}</span>
+                              </div>
+                              <div className="grid grid-cols-2 gap-1 text-[11px]">
+                                <button
+                                  type="button"
+                                  onClick={() => handleToggleProxy(inst)}
+                                  className={`px-1.5 py-1 rounded text-center border font-mono cursor-pointer ${
+                                    inst.is_proxy
+                                      ? 'bg-purple-950/60 border-purple-500/50 text-purple-300'
+                                      : 'bg-slate-900 border-slate-700 text-slate-300'
+                                  }`}
+                                >
+                                  {inst.is_proxy ? 'Proxy ✓' : 'Real'}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleToggleForSale(inst)}
+                                  className={`px-1.5 py-1 rounded text-center border font-mono cursor-pointer ${
+                                    inst.is_for_sale
+                                      ? 'bg-rose-950/60 border-rose-500/50 text-rose-300 font-bold'
+                                      : 'bg-slate-900 border-slate-700 text-slate-300'
+                                  }`}
+                                >
+                                  {inst.is_for_sale ? 'Sale ✓' : 'Keep'}
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Status Badges Overlay on Image */}
+                <div className="absolute top-1.5 right-1.5 flex flex-col items-end gap-1 pointer-events-none">
+                  {cardHasForSale && (
+                    <span className="px-1.5 py-0.5 rounded bg-rose-600/90 text-white font-mono font-black text-[9px] shadow uppercase tracking-wider">
+                      FOR SALE
+                    </span>
+                  )}
+                  {cardHasBrewProxy && !cardHasForSale && (
+                    <span className="px-1.5 py-0.5 rounded bg-purple-600/90 text-white font-mono font-black text-[9px] shadow uppercase tracking-wider">
+                      PROXY
+                    </span>
+                  )}
+                </div>
               </div>
 
               {/* Card Details & Copies */}
@@ -673,20 +876,30 @@ export const SniperSearch: React.FC = () => {
                     </div>
                   </div>
 
-                  <button
-                    onClick={() => handleOpenQuickAdd(card)}
-                    className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-slate-300 hover:text-white flex items-center gap-1.5 border border-slate-700 transition cursor-pointer"
-                  >
-                    <Plus className="h-3.5 w-3.5 text-amber-400" />
-                    <span>+ Add Copy</span>
-                  </button>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={() => handleOpenQuickAdd(card, false)}
+                      className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-slate-300 hover:text-white flex items-center gap-1.5 border border-slate-700 transition cursor-pointer"
+                    >
+                      <Plus className="h-3.5 w-3.5 text-amber-400" />
+                      <span>+ Add Copy</span>
+                    </button>
+                    <button
+                      onClick={() => handleOpenQuickAdd(card, true)}
+                      className="px-2.5 py-1.5 rounded-lg bg-purple-950/40 hover:bg-purple-900/50 text-xs text-purple-300 hover:text-white flex items-center gap-1.5 border border-purple-800/50 transition cursor-pointer"
+                      title="Add as proxy to Offline Proxy Box"
+                    >
+                      <Sparkles className="h-3.5 w-3.5 text-purple-400" />
+                      <span>+ Proxy</span>
+                    </button>
+                  </div>
                 </div>
 
                 {/* Copies list */}
                 <div className="space-y-2 pt-1">
                   {cardInstances.length === 0 && removedForCard.length === 0 ? (
                     <div className="text-xs text-slate-500 italic">
-                      None in your inventory. Tap &quot;+ Add Copy&quot; to assign a drawer coordinate.
+                      None in your inventory. Tap &quot;+ Add Copy&quot; to assign a drawer coordinate or &quot;+ Proxy&quot; for Proxy Box.
                     </div>
                   ) : (
                     <>
@@ -720,18 +933,26 @@ export const SniperSearch: React.FC = () => {
                       {/* Active copies */}
                       {cardInstances.map((inst) => {
                         const isInChaos = inst.state === 'A';
+                        const isInProxyBox = inst.state === 'P' || (inst.is_proxy && inst.state !== 'B');
+                        const isInBrewing = inst.state === 'B';
+                        const isProxy = !!inst.is_proxy;
+                        const isForSale = !!inst.is_for_sale;
                         const recentlyMovedBrew = recentlyMoved.has(inst.instance_id);
+
+                        const borderClass = isForSale
+                          ? 'border-for-sale bg-rose-950/20'
+                          : (isInBrewing && isProxy)
+                          ? 'border-proxy-theme bg-purple-950/20'
+                          : recentlyMovedBrew 
+                          ? 'bg-blue-950/30 border-blue-800/60' 
+                          : 'bg-slate-950 border-slate-800/80';
 
                         return (
                           <div
                             key={inst.instance_id}
-                            className={`flex flex-col sm:flex-row sm:items-center justify-between p-2.5 rounded-xl border gap-2 text-xs transition ${
-                              recentlyMovedBrew 
-                                ? 'bg-blue-950/30 border-blue-800/60' 
-                                : 'bg-slate-950 border-slate-800/80'
-                            }`}
+                            className={`flex flex-col sm:flex-row sm:items-center justify-between p-2.5 rounded-xl border gap-2 text-xs transition relative ${borderClass}`}
                           >
-                            <div className="flex items-center gap-2.5">
+                            <div className="flex flex-wrap items-center gap-2">
                               {isInChaos ? (
                                 <div className="flex items-center gap-2">
                                   <span className="px-2.5 py-1 rounded-lg bg-amber-500/20 text-amber-400 font-mono-coordinate font-black text-sm border border-amber-500/40 flex items-center gap-1">
@@ -740,6 +961,14 @@ export const SniperSearch: React.FC = () => {
                                   </span>
                                   <span className="text-slate-400 font-mono text-[11px] hidden sm:inline">In Chaos Drawer</span>
                                 </div>
+                              ) : isInProxyBox ? (
+                                <div className="flex items-center gap-2">
+                                  <span className="px-2.5 py-1 rounded-lg bg-purple-500/20 text-purple-300 font-mono font-bold text-xs border border-purple-500/40 flex items-center gap-1">
+                                    <Sparkles className="h-3.5 w-3.5 text-purple-400" />
+                                    <span>Proxy Box</span>
+                                  </span>
+                                  <span className="text-purple-300/80 font-mono text-[11px] font-medium">£0.00 (Proxy)</span>
+                                </div>
                               ) : recentlyMovedBrew ? (
                                 <div className="flex items-center gap-2">
                                   <span className="px-2.5 py-1 rounded-lg bg-blue-500/20 text-blue-300 font-mono-coordinate font-black text-sm border border-blue-500/40 flex items-center gap-1">
@@ -747,18 +976,30 @@ export const SniperSearch: React.FC = () => {
                                     <span>{recentlyMoved.get(inst.instance_id)?.fromLoc}</span>
                                   </span>
                                   <span className="text-blue-300 font-mono text-[11px] font-bold">➔ In Decks / Brewing</span>
+                                  {isProxy && (
+                                    <span className="text-purple-300 font-mono text-[11px] font-bold">(Proxy £0.00)</span>
+                                  )}
                                 </div>
                               ) : (
                                 <div className="flex items-center gap-2">
                                   <span className="px-2.5 py-1 rounded-lg bg-blue-500/20 text-blue-300 font-mono text-xs border border-blue-500/30 font-bold">
                                     In Decks / Brewing
                                   </span>
+                                  {isProxy && (
+                                    <span className="text-purple-300 font-mono text-[11px] font-bold">Proxy • £0.00</span>
+                                  )}
                                 </div>
+                              )}
+
+                              {isForSale && (
+                                <span className="px-2 py-0.5 rounded bg-rose-500/25 text-rose-300 font-mono text-[10px] font-black border border-rose-500/50 uppercase tracking-wider">
+                                  FOR SALE (eBay)
+                                </span>
                               )}
                             </div>
 
-                            {/* Dual Pull Options & Actions */}
-                            <div className="flex items-center gap-2 self-end sm:self-auto">
+                            {/* Actions & Dropdown */}
+                            <div className="flex items-center gap-2 self-end sm:self-auto relative">
                               {isInChaos ? (
                                 <>
                                   {/* Option 1: Pull to Brewing */}
@@ -784,10 +1025,30 @@ export const SniperSearch: React.FC = () => {
                                   {/* Edit coordinate */}
                                   <button
                                     onClick={() => handleOpenEdit(inst)}
-                                    className="p-1.5 rounded-lg text-slate-500 hover:text-white hover:bg-slate-800"
+                                    className="p-1.5 rounded-lg text-slate-500 hover:text-white hover:bg-slate-800 cursor-pointer"
                                     title="Change coordinate"
                                   >
                                     <Edit3 className="h-3.5 w-3.5" />
+                                  </button>
+                                </>
+                              ) : isInProxyBox ? (
+                                <>
+                                  {/* Proxy Box Options: To Brew or Remove */}
+                                  <button
+                                    onClick={() => handlePullToBrew(inst)}
+                                    className="px-2.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white font-bold font-mono text-xs shadow flex items-center gap-1 cursor-pointer"
+                                    title="Move proxy into Active Decks / Brewing pool"
+                                  >
+                                    <Layers className="h-3 w-3" />
+                                    <span>To Brew</span>
+                                  </button>
+
+                                  <button
+                                    onClick={() => handleRemoveForTrade(inst)}
+                                    className="p-1.5 rounded-lg text-slate-600 hover:text-rose-400 hover:bg-slate-800 cursor-pointer"
+                                    title="Remove proxy from collection"
+                                  >
+                                    <Trash2 className="h-3.5 w-3.5" />
                                   </button>
                                 </>
                               ) : recentlyMovedBrew ? (
@@ -802,10 +1063,29 @@ export const SniperSearch: React.FC = () => {
                                     <span>IN BREW (UNDO ↺)</span>
                                   </button>
 
-                                  {/* Can also remove from brew for trade */}
                                   <button
                                     onClick={() => handleRemoveForTrade(inst)}
-                                    className="p-1.5 rounded-lg text-slate-600 hover:text-rose-400 hover:bg-slate-800"
+                                    className="p-1.5 rounded-lg text-slate-600 hover:text-rose-400 hover:bg-slate-800 cursor-pointer"
+                                    title="Remove from collection"
+                                  >
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                  </button>
+                                </>
+                              ) : isProxy ? (
+                                <>
+                                  {/* Proxy in Brewing: Rule says can only return to Proxy Box, NOT units */}
+                                  <button
+                                    onClick={() => handleMoveToProxyBox(inst)}
+                                    className="px-2.5 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-bold font-mono text-xs shadow flex items-center gap-1 cursor-pointer"
+                                    title="Return proxy back to Proxy Box"
+                                  >
+                                    <RotateCcw className="h-3 w-3" />
+                                    <span>To Proxy Box</span>
+                                  </button>
+
+                                  <button
+                                    onClick={() => handleRemoveForTrade(inst)}
+                                    className="p-1.5 rounded-lg text-slate-600 hover:text-rose-400 hover:bg-slate-800 cursor-pointer"
                                     title="Remove from collection"
                                   >
                                     <Trash2 className="h-3.5 w-3.5" />
@@ -822,16 +1102,62 @@ export const SniperSearch: React.FC = () => {
                                     <span>Return to Drawers</span>
                                   </button>
 
-                                  {/* Can also remove from brew for trade */}
                                   <button
                                     onClick={() => handleRemoveForTrade(inst)}
-                                    className="p-1.5 rounded-lg text-slate-600 hover:text-rose-400 hover:bg-slate-800"
+                                    className="p-1.5 rounded-lg text-slate-600 hover:text-rose-400 hover:bg-slate-800 cursor-pointer"
                                     title="Remove from collection"
                                   >
                                     <Trash2 className="h-3.5 w-3.5" />
                                   </button>
                                 </>
                               )}
+
+                              {/* Copy Individual Options Menu Toggle */}
+                              <div className="relative">
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setCardMenuOpenId(cardMenuOpenId === inst.instance_id ? null : inst.instance_id);
+                                  }}
+                                  className={`p-1.5 rounded-lg transition border cursor-pointer ${
+                                    cardMenuOpenId === inst.instance_id
+                                      ? 'bg-amber-500 text-slate-950 border-amber-400'
+                                      : 'text-slate-400 hover:text-white bg-slate-900 border-slate-700/80 hover:bg-slate-800'
+                                  }`}
+                                  title="Copy status settings"
+                                >
+                                  <Plus className="h-3 w-3" />
+                                </button>
+
+                                {cardMenuOpenId === inst.instance_id && (
+                                  <div
+                                    onClick={(e) => e.stopPropagation()}
+                                    className="absolute right-0 top-8 w-48 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl p-1.5 z-30 space-y-1 text-xs animate-in fade-in"
+                                  >
+                                    <button
+                                      type="button"
+                                      onClick={() => handleToggleProxy(inst)}
+                                      className="w-full px-2 py-1.5 rounded-lg text-left flex items-center justify-between hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
+                                    >
+                                      <span className="flex items-center gap-1.5">
+                                        <Sparkles className="h-3.5 w-3.5 text-purple-400" />
+                                        <span>{inst.is_proxy ? 'Mark as Real Card' : 'Mark as Proxy'}</span>
+                                      </span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleToggleForSale(inst)}
+                                      className="w-full px-2 py-1.5 rounded-lg text-left flex items-center justify-between hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
+                                    >
+                                      <span className="flex items-center gap-1.5">
+                                        <ShoppingBag className="h-3.5 w-3.5 text-rose-400" />
+                                        <span>{inst.is_for_sale ? 'Remove from Sale' : 'Mark For Sale (eBay)'}</span>
+                                      </span>
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
                             </div>
                           </div>
                         );
@@ -999,77 +1325,122 @@ export const SniperSearch: React.FC = () => {
         </div>
       )}
 
+      {/* Toast Notification */}
+      {toastMessage && (
+        <div className="fixed bottom-6 right-6 z-50 bg-slate-900/95 border border-slate-700 text-slate-100 px-4 py-3 rounded-xl shadow-2xl flex items-center gap-2 text-xs font-mono backdrop-blur animate-in fade-in slide-in-from-bottom-2">
+          <Sparkles className="h-4 w-4 text-amber-400 shrink-0" />
+          <span>{toastMessage}</span>
+          <button 
+            onClick={() => setToastMessage(null)}
+            className="ml-2 text-slate-500 hover:text-white cursor-pointer"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
+
       {/* MODAL: Index New Copy */}
       {quickAddCard && (
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-sm w-full p-5 space-y-4 shadow-2xl">
             <h3 className="text-base font-bold text-white flex items-center gap-2">
               <Plus className="h-4 w-4 text-amber-400" />
-              Add Physical Copy of {quickAddCard.name}
+              <span>Add Physical Copy of {quickAddCard.name}</span>
             </h3>
 
-            <div className="grid grid-cols-3 gap-2 bg-slate-950 p-3 rounded-xl border border-slate-800 text-xs font-mono">
-              <div>
-                <label className="text-[10px] text-slate-400 block mb-1">UNIT</label>
-                <select
-                  value={addUnit}
-                  onChange={(e) => setAddUnit(parseInt(e.target.value, 10))}
-                  className="w-full bg-slate-900 border border-slate-700 rounded p-1.5 text-white"
-                >
-                  {Array.from({ length: unitCount }, (_, i) => i + 1).map((u) => <option key={u} value={u}>{u}</option>)}
-                </select>
-              </div>
-
-              <div>
-                <label className="text-[10px] text-slate-400 block mb-1">DRAWER</label>
-                <select
-                  value={addDrawer}
-                  onChange={(e) => setAddDrawer(e.target.value as any)}
-                  className="w-full bg-slate-900 border border-slate-700 rounded p-1.5 text-white"
-                >
-                  <option value="A">A (Left)</option>
-                  <option value="B">B (Middle)</option>
-                  <option value="C">C (Right)</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="text-[10px] text-slate-400 block mb-1">BATCH</label>
-                <input
-                  type="number"
-                  min={1}
-                  value={addBatch}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    if (val === '') {
-                      setAddBatch('');
-                    } else {
-                      const p = parseInt(val, 10);
-                      if (!isNaN(p)) setAddBatch(p);
-                    }
-                  }}
-                  onBlur={() => {
-                    if (addBatch === '' || addBatch < 1) {
-                      setAddBatch(1);
-                    }
-                  }}
-                  className="w-full bg-slate-900 border border-slate-700 rounded p-1.5 text-white"
-                />
-              </div>
+            {/* Proxy Toggle Checkbox */}
+            <div className="flex items-center gap-2.5 p-2.5 rounded-xl bg-slate-950 border border-slate-800">
+              <input
+                type="checkbox"
+                id="quick-add-proxy"
+                checked={addAsProxy}
+                onChange={(e) => setAddAsProxy(e.target.checked)}
+                className="h-4 w-4 rounded border-slate-700 text-purple-600 focus:ring-purple-500 bg-slate-900 cursor-pointer"
+              />
+              <label htmlFor="quick-add-proxy" className="text-xs font-mono text-slate-200 cursor-pointer flex items-center gap-1.5 select-none">
+                <Sparkles className="h-3.5 w-3.5 text-purple-400" />
+                <span>Index as Proxy (Offline Proxy Box)</span>
+              </label>
             </div>
+
+            {addAsProxy ? (
+              <div className="p-3.5 rounded-xl bg-purple-950/30 border border-purple-800/40 text-xs font-mono text-purple-300 space-y-1">
+                <div className="font-bold flex items-center gap-1.5">
+                  <Sparkles className="h-3.5 w-3.5 text-purple-400" />
+                  <span>TARGET STORAGE: Offline Proxy Box</span>
+                </div>
+                <div className="text-[11px] text-purple-300/80">
+                  Storage Units cannot contain proxies. This card will be valued at £0.00 and stored in the Proxy Box.
+                </div>
+              </div>
+            ) : (
+              <div className="grid grid-cols-3 gap-2 bg-slate-950 p-3 rounded-xl border border-slate-800 text-xs font-mono">
+                <div>
+                  <label className="text-[10px] text-slate-400 block mb-1">UNIT</label>
+                  <select
+                    value={addUnit}
+                    onChange={(e) => setAddUnit(parseInt(e.target.value, 10))}
+                    className="w-full bg-slate-900 border border-slate-700 rounded p-1.5 text-white"
+                  >
+                    {Array.from({ length: unitCount }, (_, i) => i + 1).map((u) => <option key={u} value={u}>{u}</option>)}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-[10px] text-slate-400 block mb-1">DRAWER</label>
+                  <select
+                    value={addDrawer}
+                    onChange={(e) => setAddDrawer(e.target.value as any)}
+                    className="w-full bg-slate-900 border border-slate-700 rounded p-1.5 text-white"
+                  >
+                    <option value="A">A (Left)</option>
+                    <option value="B">B (Middle)</option>
+                    <option value="C">C (Right)</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-[10px] text-slate-400 block mb-1">BATCH</label>
+                  <input
+                    type="number"
+                    min={1}
+                    value={addBatch}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (val === '') {
+                        setAddBatch('');
+                      } else {
+                        const p = parseInt(val, 10);
+                        if (!isNaN(p)) setAddBatch(p);
+                      }
+                    }}
+                    onBlur={() => {
+                      if (addBatch === '' || addBatch < 1) {
+                        setAddBatch(1);
+                      }
+                    }}
+                    className="w-full bg-slate-900 border border-slate-700 rounded p-1.5 text-white"
+                  />
+                </div>
+              </div>
+            )}
 
             <div className="flex justify-end gap-2 text-xs">
               <button
                 onClick={() => setQuickAddCard(null)}
-                className="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300"
+                className="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 hover:text-white cursor-pointer"
               >
                 Cancel
               </button>
               <button
                 onClick={handleConfirmQuickAdd}
-                className="px-3 py-1.5 rounded-lg bg-amber-500 font-bold text-slate-950"
+                className={`px-3 py-1.5 rounded-lg font-bold cursor-pointer shadow ${
+                  addAsProxy
+                    ? 'bg-purple-600 hover:bg-purple-500 text-white'
+                    : 'bg-amber-500 hover:bg-amber-400 text-slate-950'
+                }`}
               >
-                Index Copy
+                {addAsProxy ? 'Index as Proxy' : 'Index Copy'}
               </button>
             </div>
           </div>

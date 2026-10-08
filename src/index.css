@@ -159,6 +159,18 @@
   box-shadow: 0 4px 20px -2px var(--theme-glow);
 }
 
+/* Distinct For-Sale Border (eBay protection) */
+.border-for-sale {
+  border: 2px solid #ef4444 !important;
+  box-shadow: 0 0 12px rgba(239, 68, 68, 0.55) !important;
+}
+
+/* Theme-Reactive Accent Border for Proxies in Decks/Brewing */
+.border-proxy-theme {
+  border: 2px solid var(--theme-primary) !important;
+  box-shadow: 0 0 12px var(--theme-glow) !important;
+}
+
 /* Custom coordinate font / monospace styling */
 .font-mono-coordinate {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;

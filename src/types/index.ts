@@ -1,4 +1,4 @@
-export type CardLocationState = 'chaos' | 'decks';
+export type CardLocationState = 'chaos' | 'decks' | 'proxies';
 
 export interface ScryfallCard {
   oracle_id: string;
@@ -18,8 +18,10 @@ export interface CardInstance {
   instance_id: string;
   oracle_id: string;
   card_name: string;
-  location_id: string | null; // e.g. '3.B.11' if in Chaos Drawers, null if in Decks/Brewing
-  state: 'A' | 'B';           // 'A' = in Chaos Drawers, 'B' = in Decks/Brewing
+  location_id: string | null; // e.g. '3.B.11' if in Chaos Drawers, null if in Decks/Brewing, 'Proxy Box' if in Proxy Box
+  state: 'A' | 'B' | 'P';      // 'A' = in Chaos Drawers, 'B' = in Decks/Brewing, 'P' = in Proxy Box
+  is_proxy?: boolean;         // true if card is a proxy
+  is_for_sale?: boolean;      // true if card is marked for sale (eBay, etc.)
   created_at?: string;
   updated_at?: string;
 }
@@ -27,7 +29,8 @@ export interface CardInstance {
 export interface InventoryStats {
   inChaosCount: number;  // State A
   inDecksCount: number;  // State B (Brewing / Decks)
-  totalCount: number;    // Total owned (A + B)
+  proxyCount?: number;   // Total proxies (State P or in Decks)
+  totalCount: number;    // Total owned (A + B + P)
   totalEurValue: number;
   uniqueCardCount: number;
 }

@@ -13,7 +13,8 @@ import {
   X,
   Plus,
   Minus,
-  Undo2
+  Undo2,
+  ShoppingBag
 } from 'lucide-react';
 import { CardInstance, ScryfallCard } from '../types';
 import { db, generateUUID } from '../services/db';
@@ -27,7 +28,7 @@ interface UndoAction {
   instance: CardInstance;
   cardName: string;
   previousLocation: string | null;
-  previousState: 'A' | 'B';
+  previousState: 'A' | 'B' | 'P';
   message: string;
   timestamp: number;
 }
@@ -38,11 +39,15 @@ export const SkeuomorphicViewer: React.FC = () => {
   // level 2: drawer (inside open drawer, see dividers/batches)
   // level 3: batch (inside a batch, flip through cards)
   // level 4: brewing (inside diffuse decks/brewing pool)
+  // level 5: proxy box (inside dedicated proxy storage box)
   const [selectedUnit, setSelectedUnit] = useState<number | null>(null);
   const [selectedDrawer, setSelectedDrawer] = useState<'A' | 'B' | 'C' | null>(null);
   const [selectedBatch, setSelectedBatch] = useState<number | null>(null);
   const [isViewingBrewing, setIsViewingBrewing] = useState<boolean>(false);
   const [brewingSearchQuery, setBrewingSearchQuery] = useState<string>('');
+  const [isViewingProxyBox, setIsViewingProxyBox] = useState<boolean>(false);
+  const [proxySearchQuery, setProxySearchQuery] = useState<string>('');
+  const [cardMenuOpenId, setCardMenuOpenId] = useState<string | null>(null);
 
   // Dynamic storage units count
   const [unitCount, setUnitCount] = useState<number>(() => db.getUnitCount());
@@ -149,8 +154,10 @@ export const SkeuomorphicViewer: React.FC = () => {
     return instances.filter(inst => inst.state === 'B');
   }, [instances]);
 
+  // Proxies MUST always be calculated with a price of £0
   const brewingEurValue = useMemo(() => {
     return brewingCards.reduce((acc, inst) => {
+      if (inst.is_proxy) return acc;
       const meta = cardDictionary.get(inst.card_name.toLowerCase()) || cardDictionary.get(inst.oracle_id) || db.getCard(inst.card_name);
       return acc + (meta?.price_eur || 0);
     }, 0);
@@ -161,6 +168,24 @@ export const SkeuomorphicViewer: React.FC = () => {
     const q = brewingSearchQuery.toLowerCase();
     return brewingCards.filter(inst => inst.card_name.toLowerCase().includes(q));
   }, [brewingCards, brewingSearchQuery]);
+
+  // Cards currently in Offline Proxy Box (State P)
+  const proxyBoxCards = useMemo(() => {
+    return instances.filter(inst => inst.state === 'P' || (inst.is_proxy && inst.state !== 'B' && inst.state !== 'A'));
+  }, [instances]);
+
+  const filteredProxyBoxCards = useMemo(() => {
+    if (!proxySearchQuery.trim()) return proxyBoxCards;
+    const q = proxySearchQuery.toLowerCase();
+    return proxyBoxCards.filter(inst => inst.card_name.toLowerCase().includes(q));
+  }, [proxyBoxCards, proxySearchQuery]);
+
+  // Close open card dropdown menu when clicking anywhere outside
+  useEffect(() => {
+    const handleClickOutside = () => setCardMenuOpenId(null);
+    window.addEventListener('click', handleClickOutside);
+    return () => window.removeEventListener('click', handleClickOutside);
+  }, []);
 
   // Trigger an undoable action with countdown progress bar
   const triggerUndoableAction = (
@@ -222,7 +247,9 @@ export const SkeuomorphicViewer: React.FC = () => {
     const { type, instance, previousLocation } = activeUndo;
 
     if (type === 'checkout') {
-      if (previousLocation) {
+      if (instance.is_proxy || instance.state === 'P' || previousLocation === 'Proxy Box') {
+        db.returnToProxyBox(instance.instance_id);
+      } else if (previousLocation) {
         db.returnToChaos(instance.instance_id, previousLocation);
       } else {
         db.restoreInstance(instance);
@@ -230,8 +257,12 @@ export const SkeuomorphicViewer: React.FC = () => {
     } else if (type === 'remove') {
       db.restoreInstance(instance);
     } else if (type === 'relocate') {
-      if (previousLocation) {
+      if (previousLocation === 'Proxy Box') {
+        db.moveToProxyBox(instance.instance_id);
+      } else if (previousLocation) {
         db.updateLocation(instance.instance_id, previousLocation);
+      } else {
+        db.restoreInstance(instance);
       }
     } else if (type === 'return') {
       db.checkoutToDecks(instance.instance_id);
@@ -248,6 +279,7 @@ export const SkeuomorphicViewer: React.FC = () => {
     setSelectedDrawer(drawer);
     setSelectedBatch(null);
     setIsViewingBrewing(false);
+    setIsViewingProxyBox(false);
     window.scrollTo({ top: 0, behavior: 'instant' });
   };
 
@@ -255,6 +287,18 @@ export const SkeuomorphicViewer: React.FC = () => {
     playSound('pull');
     triggerHaptic('medium');
     setIsViewingBrewing(true);
+    setIsViewingProxyBox(false);
+    setSelectedUnit(null);
+    setSelectedDrawer(null);
+    setSelectedBatch(null);
+    window.scrollTo({ top: 0, behavior: 'instant' });
+  };
+
+  const handleOpenProxyBox = () => {
+    playSound('pull');
+    triggerHaptic('medium');
+    setIsViewingProxyBox(true);
+    setIsViewingBrewing(false);
     setSelectedUnit(null);
     setSelectedDrawer(null);
     setSelectedBatch(null);
@@ -274,6 +318,7 @@ export const SkeuomorphicViewer: React.FC = () => {
     setSelectedDrawer(null);
     setSelectedBatch(null);
     setIsViewingBrewing(false);
+    setIsViewingProxyBox(false);
     window.scrollTo({ top: 0, behavior: 'instant' });
   };
 
@@ -281,6 +326,42 @@ export const SkeuomorphicViewer: React.FC = () => {
     playSound('skip');
     setSelectedBatch(null);
     window.scrollTo({ top: 0, behavior: 'instant' });
+  };
+
+  // Toggle Proxy status on card
+  const handleToggleProxy = (inst: CardInstance) => {
+    playSound('click');
+    triggerHaptic('light');
+    const res = db.toggleProxy(inst.instance_id);
+    setCardMenuOpenId(null);
+    if (res.relocatedToProxyBox) {
+      triggerUndoableAction(
+        'relocate',
+        inst,
+        () => {},
+        `Marked "${inst.card_name}" as Proxy ➔ relocated to Proxy Box`
+      );
+    }
+  };
+
+  // Toggle For Sale status on card
+  const handleToggleForSale = (inst: CardInstance) => {
+    playSound('click');
+    triggerHaptic('light');
+    db.toggleForSale(inst.instance_id);
+    setCardMenuOpenId(null);
+  };
+
+  // Return proxy to Proxy Box from Decks/Brewing
+  const handleReturnProxyToBox = (inst: CardInstance) => {
+    playSound('pull');
+    triggerHaptic('medium');
+    triggerUndoableAction(
+      'return',
+      inst,
+      () => db.returnToProxyBox(inst.instance_id),
+      `Returned proxy "${inst.card_name}" to Proxy Box`
+    );
   };
 
   // Dynamic unit management
@@ -399,7 +480,7 @@ export const SkeuomorphicViewer: React.FC = () => {
   return (
     <div className="max-w-4xl mx-auto px-4 sm:px-6 py-6 space-y-6 relative">
       {/* LEVEL 1: SKEUOMORPHIC CABINET VIEW */}
-      {selectedUnit === null && !isViewingBrewing && (
+      {selectedUnit === null && !isViewingBrewing && !isViewingProxyBox && (
         <div className="space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <div>
@@ -543,6 +624,54 @@ export const SkeuomorphicViewer: React.FC = () => {
                 </div>
               </button>
             </div>
+
+            {/* SKEUOMORPHIC OFFLINE PROXY BOX COMPARTMENT (PARALLEL TOP-LEVEL SECTION) */}
+            <div className="pt-3 border-t border-stone-800/80 mt-2">
+              <div className="flex items-center justify-between px-1 text-[10px] font-mono font-bold text-purple-400 uppercase tracking-widest mb-1.5">
+                <span>OFFLINE PROXY BOX STORAGE</span>
+                <span>{proxyBoxCards.length} PROXIES</span>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleOpenProxyBox}
+                className="w-full group relative bg-gradient-to-b from-purple-950/30 via-neutral-850 to-neutral-900 hover:from-purple-900/40 hover:to-neutral-850 border-2 border-purple-900/70 hover:border-purple-400 rounded-2xl p-4 sm:p-5 text-left shadow-xl hover:shadow-purple-500/10 hover:-translate-y-0.5 active:translate-y-0 transition-all cursor-pointer flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+              >
+                <div className="flex items-center gap-3.5">
+                  <div className="p-3 rounded-xl bg-purple-500/10 border border-purple-500/30 text-purple-400 group-hover:scale-105 transition-transform shadow-inner">
+                    <Sparkles className="h-6 w-6" />
+                  </div>
+
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-white text-base">
+                        Proxy Box
+                      </span>
+                      <span className="px-2.5 py-0.5 rounded-full bg-purple-500/20 border border-purple-500/30 text-purple-300 font-mono text-xs font-bold">
+                        {proxyBoxCards.length} Proxies
+                      </span>
+                    </div>
+                    <p className="text-xs text-stone-400 mt-0.5">
+                      Dedicated offline storage for proxy card copies (£0 valuation, separate from storage units).
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between sm:justify-end gap-4 shrink-0">
+                  <div className="text-left sm:text-right">
+                    <span className="text-[10px] font-mono uppercase text-stone-400 block font-bold">MARKET VALUE</span>
+                    <span className="text-sm font-bold font-mono text-purple-300">
+                      £0.00 (Fixed £0)
+                    </span>
+                  </div>
+
+                  <div className="px-4 py-2 rounded-xl bg-purple-600 group-hover:bg-purple-500 text-white font-mono font-bold text-xs flex items-center gap-1.5 shadow-md">
+                    <span>Inspect Proxy Box</span>
+                    <ArrowRight className="h-3.5 w-3.5 group-hover:translate-x-0.5 transition-transform" />
+                  </div>
+                </div>
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -678,7 +807,9 @@ export const SkeuomorphicViewer: React.FC = () => {
                   return (
                     <div
                       key={inst.instance_id}
-                      className="bg-slate-950 border border-slate-800 rounded-2xl overflow-hidden shadow-lg hover:border-amber-500/60 transition flex flex-col justify-between"
+                      className={`bg-slate-950 border rounded-2xl overflow-hidden shadow-lg transition flex flex-col justify-between ${
+                        inst.is_for_sale ? 'border-for-sale' : 'border-slate-800 hover:border-amber-500/60'
+                      }`}
                     >
                       {/* Card Image */}
                       <div className="relative aspect-[5/7] bg-black overflow-hidden group">
@@ -691,6 +822,62 @@ export const SkeuomorphicViewer: React.FC = () => {
                             e.currentTarget.src = CARD_BACK_IMAGE;
                           }}
                         />
+
+                        {/* Top-Left `+` Menu Button */}
+                        <div className="absolute top-1.5 left-1.5 z-20">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setCardMenuOpenId(cardMenuOpenId === inst.instance_id ? null : inst.instance_id);
+                            }}
+                            className={`h-6 w-6 rounded-full flex items-center justify-center transition shadow-lg cursor-pointer ${
+                              cardMenuOpenId === inst.instance_id
+                                ? 'bg-amber-500 text-slate-950 font-black ring-2 ring-amber-300'
+                                : 'bg-slate-950/85 hover:bg-slate-900 text-white border border-slate-700/80 hover:border-amber-400'
+                            }`}
+                            title="Card options"
+                          >
+                            <Plus className="h-3.5 w-3.5" />
+                          </button>
+
+                          {cardMenuOpenId === inst.instance_id && (
+                            <div 
+                              onClick={(e) => e.stopPropagation()} 
+                              className="absolute left-0 top-7 w-48 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl p-1.5 z-30 space-y-1 text-xs animate-in fade-in"
+                            >
+                              <button
+                                type="button"
+                                onClick={() => handleToggleProxy(inst)}
+                                className="w-full px-2.5 py-1.5 rounded-lg text-left flex items-center justify-between hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
+                              >
+                                <span className="flex items-center gap-1.5">
+                                  <Sparkles className="h-3.5 w-3.5 text-purple-400" />
+                                  <span>Mark as Proxy</span>
+                                </span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleToggleForSale(inst)}
+                                className="w-full px-2.5 py-1.5 rounded-lg text-left flex items-center justify-between hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
+                              >
+                                <span className="flex items-center gap-1.5">
+                                  <ShoppingBag className="h-3.5 w-3.5 text-rose-400" />
+                                  <span>{inst.is_for_sale ? 'Remove from Sale' : 'Mark For Sale (eBay)'}</span>
+                                </span>
+                              </button>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Status Badges */}
+                        <div className="absolute top-1.5 right-1.5 flex flex-col items-end gap-1 pointer-events-none">
+                          {inst.is_for_sale && (
+                            <span className="bg-rose-600/95 text-white font-mono font-black text-[9px] px-1.5 py-0.5 rounded shadow tracking-wider uppercase border border-rose-400/50">
+                              FOR SALE
+                            </span>
+                          )}
+                        </div>
 
                         <div className="absolute bottom-1 right-1 bg-slate-950/90 text-emerald-400 font-mono font-bold text-[10px] px-1.5 py-0.5 rounded border border-emerald-900/50">
                           €{meta?.price_eur ? meta.price_eur.toFixed(2) : '0.00'}
@@ -800,7 +987,11 @@ export const SkeuomorphicViewer: React.FC = () => {
                   return (
                     <div
                       key={inst.instance_id}
-                      className="bg-slate-950 border border-slate-800 rounded-2xl overflow-hidden shadow-lg hover:border-blue-500/60 transition flex flex-col justify-between"
+                      className={`bg-slate-950 border rounded-2xl overflow-hidden shadow-lg transition flex flex-col justify-between ${
+                        inst.is_for_sale 
+                          ? 'border-for-sale' 
+                          : (inst.is_proxy ? 'border-proxy-theme' : 'border-slate-800 hover:border-blue-500/60')
+                      }`}
                     >
                       {/* Card Image */}
                       <div className="relative aspect-[5/7] bg-black overflow-hidden group">
@@ -814,8 +1005,74 @@ export const SkeuomorphicViewer: React.FC = () => {
                           }}
                         />
 
-                        <div className="absolute bottom-1 right-1 bg-slate-950/90 text-emerald-400 font-mono font-bold text-[10px] px-1.5 py-0.5 rounded border border-emerald-900/50">
-                          €{meta?.price_eur ? meta.price_eur.toFixed(2) : '0.00'}
+                        {/* Top-Left `+` Menu Button */}
+                        <div className="absolute top-1.5 left-1.5 z-20">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setCardMenuOpenId(cardMenuOpenId === inst.instance_id ? null : inst.instance_id);
+                            }}
+                            className={`h-6 w-6 rounded-full flex items-center justify-center transition shadow-lg cursor-pointer ${
+                              cardMenuOpenId === inst.instance_id
+                                ? 'bg-amber-500 text-slate-950 font-black ring-2 ring-amber-300'
+                                : 'bg-slate-950/85 hover:bg-slate-900 text-white border border-slate-700/80 hover:border-amber-400'
+                            }`}
+                            title="Card options"
+                          >
+                            <Plus className="h-3.5 w-3.5" />
+                          </button>
+
+                          {cardMenuOpenId === inst.instance_id && (
+                            <div 
+                              onClick={(e) => e.stopPropagation()} 
+                              className="absolute left-0 top-7 w-48 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl p-1.5 z-30 space-y-1 text-xs animate-in fade-in"
+                            >
+                              <button
+                                type="button"
+                                onClick={() => handleToggleProxy(inst)}
+                                className="w-full px-2.5 py-1.5 rounded-lg text-left flex items-center justify-between hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
+                              >
+                                <span className="flex items-center gap-1.5">
+                                  <Sparkles className="h-3.5 w-3.5 text-purple-400" />
+                                  <span>{inst.is_proxy ? 'Mark as Real Card' : 'Mark as Proxy'}</span>
+                                </span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleToggleForSale(inst)}
+                                className="w-full px-2.5 py-1.5 rounded-lg text-left flex items-center justify-between hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
+                              >
+                                <span className="flex items-center gap-1.5">
+                                  <ShoppingBag className="h-3.5 w-3.5 text-rose-400" />
+                                  <span>{inst.is_for_sale ? 'Remove from Sale' : 'Mark For Sale (eBay)'}</span>
+                                </span>
+                              </button>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Status Badges */}
+                        <div className="absolute top-1.5 right-1.5 flex flex-col items-end gap-1 pointer-events-none">
+                          {inst.is_for_sale && (
+                            <span className="bg-rose-600/95 text-white font-mono font-black text-[9px] px-1.5 py-0.5 rounded shadow tracking-wider uppercase border border-rose-400/50">
+                              FOR SALE
+                            </span>
+                          )}
+                          {inst.is_proxy && (
+                            <span className="bg-purple-900/90 text-purple-200 font-mono font-bold text-[9px] px-1.5 py-0.5 rounded shadow border border-purple-500/40">
+                              PROXY
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Price Badge */}
+                        <div className="absolute bottom-1 right-1 bg-slate-950/90 font-mono font-bold text-[10px] px-1.5 py-0.5 rounded border border-slate-800">
+                          {inst.is_proxy ? (
+                            <span className="text-purple-300">£0.00 (Proxy)</span>
+                          ) : (
+                            <span className="text-emerald-400">€{meta?.price_eur ? meta.price_eur.toFixed(2) : '0.00'}</span>
+                          )}
                         </div>
                       </div>
 
@@ -826,21 +1083,202 @@ export const SkeuomorphicViewer: React.FC = () => {
                         </div>
 
                         <div className="flex items-center gap-1.5">
-                          {/* Return to Chaos Drawers button */}
-                          <button
-                            onClick={() => handleOpenReturnModal(inst)}
-                            className="flex-1 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-mono font-bold text-[11px] flex items-center justify-center gap-1 shadow cursor-pointer transition"
-                            title="Return card to physical Chaos drawer"
-                          >
-                            <RotateCcw className="h-3 w-3" />
-                            <span>Return</span>
-                          </button>
+                          {/* If proxy: Return to Proxy Box. If real: Return to Chaos Drawers */}
+                          {inst.is_proxy ? (
+                            <button
+                              onClick={() => handleReturnProxyToBox(inst)}
+                              className="flex-1 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-mono font-bold text-[11px] flex items-center justify-center gap-1 shadow cursor-pointer transition"
+                              title="Return proxy card to Proxy Box"
+                            >
+                              <RotateCcw className="h-3 w-3" />
+                              <span>To Proxy Box</span>
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => handleOpenReturnModal(inst)}
+                              className="flex-1 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-mono font-bold text-[11px] flex items-center justify-center gap-1 shadow cursor-pointer transition"
+                              title="Return card to physical Chaos drawer"
+                            >
+                              <RotateCcw className="h-3 w-3" />
+                              <span>Return</span>
+                            </button>
+                          )}
 
                           {/* Trade / Sell */}
                           <button
                             onClick={() => handleRemoveCard(inst)}
                             className="p-1.5 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-slate-800 transition cursor-pointer"
                             title="Remove from collection (Trade / Sell)"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* LEVEL 5: INSIDE OFFLINE PROXY BOX */}
+      {isViewingProxyBox && selectedUnit === null && (
+        <div className="space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <button
+              onClick={handleBackToCabinet}
+              className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-mono text-slate-200 flex items-center gap-1.5 shadow cursor-pointer self-start"
+            >
+              <ChevronLeft className="h-4 w-4" />
+              <span>Back to Chaos Cabinet</span>
+            </button>
+
+            <div className="text-left sm:text-right">
+              <span className="text-xs font-mono uppercase text-purple-400 font-bold block flex items-center sm:justify-end gap-1.5">
+                <Sparkles className="h-4 w-4" />
+                <span>INSPECTING OFFLINE PROXY BOX</span>
+              </span>
+              <span className="text-lg font-black text-white font-mono">
+                {proxyBoxCards.length} Proxies <span className="text-slate-400 font-normal text-sm sm:text-base">(£0.00 Fixed Valuation)</span>
+              </span>
+            </div>
+          </div>
+
+          {/* Search/filter within proxy cards */}
+          {proxyBoxCards.length > 0 && (
+            <div className="relative">
+              <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500" />
+              <input
+                type="text"
+                value={proxySearchQuery}
+                onChange={(e) => setProxySearchQuery(e.target.value)}
+                placeholder="Filter proxies in Proxy Box..."
+                className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-slate-900 border border-slate-800 text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-purple-500"
+              />
+            </div>
+          )}
+
+          {/* Cards Gallery */}
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-2xl">
+            {filteredProxyBoxCards.length === 0 ? (
+              <div className="p-12 text-center text-slate-500 text-xs italic">
+                {proxyBoxCards.length === 0 
+                  ? 'No cards currently in the Proxy Box. Ingest proxies via Batch Ingest or mark cards as proxies to store them here!' 
+                  : `No cards matching "${proxySearchQuery}" in Proxy Box.`}
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+                {filteredProxyBoxCards.map((inst) => {
+                  const meta = cardDictionary.get(inst.card_name.toLowerCase()) || cardDictionary.get(inst.oracle_id) || db.getCard(inst.card_name);
+
+                  return (
+                    <div
+                      key={inst.instance_id}
+                      className={`bg-slate-950 border rounded-2xl overflow-hidden shadow-lg transition flex flex-col justify-between ${
+                        inst.is_for_sale ? 'border-for-sale' : 'border-slate-800 hover:border-purple-500/60'
+                      }`}
+                    >
+                      {/* Card Image */}
+                      <div className="relative aspect-[5/7] bg-black overflow-hidden group">
+                        <img
+                          src={meta?.image_url_normal || getScryfallImageFallback(inst.card_name)}
+                          alt={inst.card_name}
+                          loading="lazy"
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                          onError={(e) => {
+                            e.currentTarget.src = CARD_BACK_IMAGE;
+                          }}
+                        />
+
+                        {/* Top-Left `+` Menu Button */}
+                        <div className="absolute top-1.5 left-1.5 z-20">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setCardMenuOpenId(cardMenuOpenId === inst.instance_id ? null : inst.instance_id);
+                            }}
+                            className={`h-6 w-6 rounded-full flex items-center justify-center transition shadow-lg cursor-pointer ${
+                              cardMenuOpenId === inst.instance_id
+                                ? 'bg-amber-500 text-slate-950 font-black ring-2 ring-amber-300'
+                                : 'bg-slate-950/85 hover:bg-slate-900 text-white border border-slate-700/80 hover:border-amber-400'
+                            }`}
+                            title="Card options"
+                          >
+                            <Plus className="h-3.5 w-3.5" />
+                          </button>
+
+                          {cardMenuOpenId === inst.instance_id && (
+                            <div 
+                              onClick={(e) => e.stopPropagation()} 
+                              className="absolute left-0 top-7 w-48 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl p-1.5 z-30 space-y-1 text-xs animate-in fade-in"
+                            >
+                              <button
+                                type="button"
+                                onClick={() => handleToggleProxy(inst)}
+                                className="w-full px-2.5 py-1.5 rounded-lg text-left flex items-center justify-between hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
+                              >
+                                <span className="flex items-center gap-1.5">
+                                  <Sparkles className="h-3.5 w-3.5 text-purple-400" />
+                                  <span>Mark as Real Card</span>
+                                </span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleToggleForSale(inst)}
+                                className="w-full px-2.5 py-1.5 rounded-lg text-left flex items-center justify-between hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
+                              >
+                                <span className="flex items-center gap-1.5">
+                                  <ShoppingBag className="h-3.5 w-3.5 text-rose-400" />
+                                  <span>{inst.is_for_sale ? 'Remove from Sale' : 'Mark For Sale (eBay)'}</span>
+                                </span>
+                              </button>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Status Badges */}
+                        <div className="absolute top-1.5 right-1.5 flex flex-col items-end gap-1 pointer-events-none">
+                          {inst.is_for_sale && (
+                            <span className="bg-rose-600/95 text-white font-mono font-black text-[9px] px-1.5 py-0.5 rounded shadow tracking-wider uppercase border border-rose-400/50">
+                              FOR SALE
+                            </span>
+                          )}
+                          <span className="bg-purple-900/90 text-purple-200 font-mono font-bold text-[9px] px-1.5 py-0.5 rounded shadow border border-purple-500/40">
+                            PROXY
+                          </span>
+                        </div>
+
+                        {/* Fixed £0 Valuation Badge */}
+                        <div className="absolute bottom-1 right-1 bg-slate-950/90 text-purple-300 font-mono font-bold text-[10px] px-1.5 py-0.5 rounded border border-purple-900/50">
+                          £0.00
+                        </div>
+                      </div>
+
+                      {/* Card Info & Actions */}
+                      <div className="p-2.5 space-y-2">
+                        <div className="text-xs font-bold text-white truncate" title={inst.card_name}>
+                          {inst.card_name}
+                        </div>
+
+                        <div className="flex items-center gap-1.5">
+                          {/* Checkout to Brewing */}
+                          <button
+                            onClick={() => handleCheckoutCard(inst)}
+                            className="flex-1 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-mono font-bold text-[11px] flex items-center justify-center gap-1 shadow cursor-pointer transition"
+                            title="Check out proxy to Decks / Brewing"
+                          >
+                            <Layers className="h-3 w-3" />
+                            <span>To Brewing</span>
+                          </button>
+
+                          {/* Remove */}
+                          <button
+                            onClick={() => handleRemoveCard(inst)}
+                            className="p-1.5 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-slate-800 transition cursor-pointer"
+                            title="Remove proxy from collection"
                           >
                             <Trash2 className="h-3.5 w-3.5" />
                           </button>

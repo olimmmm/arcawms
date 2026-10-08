@@ -234,7 +234,11 @@ export const PickPathRunner: React.FC = () => {
                       </div>
 
                       {/* Card Thumbnail */}
-                      <div className="w-10 h-14 rounded overflow-hidden border border-slate-800 bg-slate-950 shrink-0">
+                      <div className={`w-10 h-14 rounded overflow-hidden shrink-0 transition ${
+                        item.original_instance?.is_for_sale 
+                          ? 'border-for-sale' 
+                          : 'border border-slate-800 bg-slate-950'
+                      }`}>
                         <img
                           src={item.card_metadata?.image_url_normal || getScryfallImageFallback(item.card_name)}
                           alt={item.card_name}
@@ -248,6 +252,11 @@ export const PickPathRunner: React.FC = () => {
                       <div>
                         <div className="text-sm font-bold text-white flex items-center gap-2">
                           <span>{item.card_name}</span>
+                          {item.original_instance?.is_for_sale && (
+                            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-rose-600/90 text-white font-bold tracking-wider">
+                              FOR SALE
+                            </span>
+                          )}
                           {item.card_metadata?.price_eur ? (
                             <span className="text-[11px] font-mono text-emerald-400">€{item.card_metadata.price_eur.toFixed(2)}</span>
                           ) : null}

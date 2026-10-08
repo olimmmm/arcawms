@@ -227,7 +227,8 @@ export function generatePickRoute(
         batch_index: coord.batch_index,
         status: 'pending',
         inChaos: true,
-        card_metadata: metadata
+        card_metadata: metadata,
+        original_instance: inst
       });
       needed--;
     }
@@ -238,6 +239,7 @@ export function generatePickRoute(
       for (const inst of inDecksInstances) {
         if (needed <= 0) break;
         allocated.add(inst.instance_id);
+
         const metadata = cardDictionary.get(inst.card_name.toLowerCase()) || cardDictionary.get(inst.oracle_id);
 
         route.push({
@@ -248,7 +250,8 @@ export function generatePickRoute(
           location_id: null,
           status: 'pending',
           inChaos: false, // Already out in decks
-          card_metadata: metadata
+          card_metadata: metadata,
+          original_instance: inst
         });
         needed--;
       }
