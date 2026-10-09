@@ -410,7 +410,7 @@ export const CustomListView: React.FC<CustomListViewProps> = ({ onNavigateToPick
             {toast.type === 'success' ? (
               <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
             ) : (
-              <AlertCircle className="h-4 w-4 text-amber-400 shrink-0" />
+              <AlertCircle className="h-4 w-4 text-theme-accent shrink-0" />
             )}
             <span>{toast.message}</span>
           </div>
@@ -460,14 +460,14 @@ export const CustomListView: React.FC<CustomListViewProps> = ({ onNavigateToPick
               onClick={() => { setActiveListId(list.id); playSound('click'); }}
               className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold whitespace-nowrap transition cursor-pointer border ${
                 isActive
-                  ? 'bg-slate-800 text-white border-amber-500/50 shadow-md ring-1 ring-amber-500/30'
+                  ? 'bg-slate-800 text-white border-theme-accent/50 shadow-md ring-1 ring-theme-accent/30'
                   : 'bg-slate-900/80 text-slate-400 border-slate-800 hover:text-slate-200 hover:bg-slate-800/60'
               }`}
             >
-              <Bookmark className={`h-3.5 w-3.5 ${isActive ? 'text-amber-400 fill-amber-400/20' : 'text-slate-500'}`} />
+              <Bookmark className={`h-3.5 w-3.5 ${isActive ? 'text-theme-accent fill-theme-accent/20' : 'text-slate-500'}`} />
               <span>{list.name}</span>
               <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded ${
-                isActive ? 'bg-amber-500/20 text-amber-300' : 'bg-slate-800 text-slate-400'
+                isActive ? 'bg-theme-accent-subtle text-theme-accent' : 'bg-slate-800 text-slate-400'
               }`}>
                 {itemCount}
               </span>
@@ -513,11 +513,11 @@ export const CustomListView: React.FC<CustomListViewProps> = ({ onNavigateToPick
                 type="button"
                 onClick={handleCopyDecklist}
                 disabled={activeList.items.length === 0}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
-                title="Copy cards as text decklist"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-theme-accent-subtle hover:bg-theme-accent/20 text-theme-accent text-xs font-semibold border border-theme-accent-subtle transition disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer shadow-sm"
+                title="Copy cards as standard MTG text list"
               >
-                <Copy className="h-3.5 w-3.5 text-slate-400" />
-                <span>Copy Decklist</span>
+                <Copy className="h-3.5 w-3.5" />
+                <span>Copy to Clipboard</span>
               </button>
 
               <button
@@ -541,7 +541,7 @@ export const CustomListView: React.FC<CustomListViewProps> = ({ onNavigateToPick
             </div>
             <div className="bg-slate-950/60 p-2.5 rounded-xl border border-slate-800/60">
               <div className="text-[10px] font-mono text-slate-500 uppercase tracking-wider">Unique Titles</div>
-              <div className="text-base font-black text-amber-400 font-mono mt-0.5">{activeListStats.uniqueCount} titles</div>
+              <div className="text-base font-black text-theme-accent font-mono mt-0.5">{activeListStats.uniqueCount} titles</div>
             </div>
             <div className="bg-slate-950/60 p-2.5 rounded-xl border border-slate-800/60">
               <div className="text-[10px] font-mono text-slate-500 uppercase tracking-wider">Est. Market Value</div>
@@ -618,7 +618,7 @@ export const CustomListView: React.FC<CustomListViewProps> = ({ onNavigateToPick
                     className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-theme-primary focus:ring-1 focus:ring-theme-primary"
                   />
                   {isSearchingScryfall && (
-                    <div className="absolute right-3 top-3 text-[10px] text-amber-400 animate-pulse font-mono">
+                    <div className="absolute right-3 top-3 text-[10px] text-theme-accent animate-pulse font-mono">
                       Searching...
                     </div>
                   )}
@@ -668,7 +668,7 @@ export const CustomListView: React.FC<CustomListViewProps> = ({ onNavigateToPick
                         type="button"
                         onClick={() => handleAddSingleCard(name)}
                         className={`w-full px-3.5 py-2 text-left text-xs font-semibold flex items-center justify-between cursor-pointer transition ${
-                          isSelected ? 'bg-amber-500/20 text-amber-300' : 'text-slate-200 hover:bg-slate-800'
+                          isSelected ? 'bg-theme-accent-subtle text-theme-accent' : 'text-slate-200 hover:bg-slate-800'
                         }`}
                       >
                         <span>{name}</span>
@@ -695,7 +695,7 @@ export const CustomListView: React.FC<CustomListViewProps> = ({ onNavigateToPick
             <div className="flex flex-col sm:flex-row items-center justify-between gap-2">
               <div className="text-xs text-slate-400">
                 {bulkFeedback ? (
-                  <span className="text-amber-400 font-mono animate-pulse">{bulkFeedback}</span>
+                  <span className="text-theme-accent font-mono animate-pulse">{bulkFeedback}</span>
                 ) : (
                   <span>Strips foil codes and set numbers automatically.</span>
                 )}
@@ -804,7 +804,7 @@ export const CustomListView: React.FC<CustomListViewProps> = ({ onNavigateToPick
 
                   {/* Quantity Badge (Top-Right) */}
                   <div className="absolute top-2 right-2 bg-slate-950/90 border border-slate-700/80 rounded-lg px-2 py-0.5 shadow-lg">
-                    <span className="text-xs font-black font-mono text-amber-400">×{item.count}</span>
+                    <span className="text-xs font-black font-mono text-theme-accent">×{item.count}</span>
                   </div>
 
                   {/* Price Tag (Bottom-Right) */}
@@ -879,7 +879,7 @@ export const CustomListView: React.FC<CustomListViewProps> = ({ onNavigateToPick
                       title={item.notes || 'Click to add notes'}
                     >
                       {item.notes ? (
-                        <span className="italic text-amber-300/80">“{item.notes}”</span>
+                        <span className="italic text-theme-accent/80">“{item.notes}”</span>
                       ) : (
                         <span className="text-slate-600 hover:text-slate-400">+ Add note</span>
                       )}
@@ -947,7 +947,7 @@ export const CustomListView: React.FC<CustomListViewProps> = ({ onNavigateToPick
                             className="h-10 w-7 object-cover rounded shadow shrink-0 bg-slate-950"
                           />
                           <div>
-                            <div className="font-bold text-white hover:text-amber-400 transition">{item.card_name}</div>
+                            <div className="font-bold text-white hover:text-theme-accent transition">{item.card_name}</div>
                             {meta?.mana_cost && (
                               <div className="text-[10px] text-slate-400 font-mono">{meta.mana_cost}</div>
                             )}
@@ -1129,7 +1129,7 @@ export const CustomListView: React.FC<CustomListViewProps> = ({ onNavigateToPick
           <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-5 shadow-2xl space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="text-base font-black text-white flex items-center gap-2">
-                <Edit3 className="h-5 w-5 text-amber-400" />
+                <Edit3 className="h-5 w-5 text-theme-accent" />
                 <span>Edit List Details</span>
               </h3>
               <button

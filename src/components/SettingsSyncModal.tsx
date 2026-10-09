@@ -272,7 +272,7 @@ export const SettingsSyncModal: React.FC<SettingsSyncModalProps> = ({
         <div className="space-y-3 pt-2 border-t border-slate-800">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <Boxes className="h-4 w-4 text-amber-400" />
+              <Boxes className="h-4 w-4 text-theme-accent" />
               <span className="text-xs font-mono uppercase text-slate-300 font-bold">
                 CHAOS CABINET CONFIGURATION:
               </span>
@@ -284,7 +284,7 @@ export const SettingsSyncModal: React.FC<SettingsSyncModalProps> = ({
             <div>
               <div className="text-xs font-bold text-white flex items-center gap-2">
                 <span>Active Storage Units:</span>
-                <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-mono font-black text-xs border border-amber-500/40">
+                <span className="px-2 py-0.5 rounded bg-theme-accent-subtle text-theme-accent font-mono font-black text-xs border border-theme-accent-subtle">
                   {unitCount} Units ({unitCount * 3} Drawers)
                 </span>
               </div>
@@ -296,7 +296,7 @@ export const SettingsSyncModal: React.FC<SettingsSyncModalProps> = ({
             <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
               <button
                 onClick={handleAddUnit}
-                className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold font-mono text-xs flex items-center gap-1.5 shadow transition cursor-pointer"
+                className="px-3 py-1.5 rounded-xl bg-theme-accent hover:bg-theme-accent-hover text-slate-950 font-bold font-mono text-xs flex items-center gap-1.5 shadow transition cursor-pointer"
               >
                 <Plus className="h-3.5 w-3.5" />
                 <span>+ Add Unit {unitCount + 1}</span>

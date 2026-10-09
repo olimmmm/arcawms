@@ -540,6 +540,34 @@ export const SkeuomorphicViewer: React.FC = () => {
     return warehouseMap[selectedUnit]?.[selectedDrawer]?.get(selectedBatch) || [];
   }, [selectedUnit, selectedDrawer, selectedBatch, warehouseMap]);
 
+  // Monetary value for cards in the currently opened drawer
+  const drawerTotalEur = useMemo(() => {
+    return activeBatchesInDrawer.reduce((drawerSum, [_, bCards]) => {
+      return drawerSum + bCards.reduce((batchSum, inst) => {
+        if (inst.is_proxy) return batchSum;
+        const meta = cardDictionary.get(inst.card_name.toLowerCase()) || cardDictionary.get(inst.oracle_id) || db.getCard(inst.card_name);
+        return batchSum + (meta?.price_eur || 0);
+      }, 0);
+    }, 0);
+  }, [activeBatchesInDrawer, cardDictionary]);
+
+  // Monetary value for cards in the currently opened batch
+  const batchTotalEur = useMemo(() => {
+    return activeCardsInBatch.reduce((sum, inst) => {
+      if (inst.is_proxy) return sum;
+      const meta = cardDictionary.get(inst.card_name.toLowerCase()) || cardDictionary.get(inst.oracle_id) || db.getCard(inst.card_name);
+      return sum + (meta?.price_eur || 0);
+    }, 0);
+  }, [activeCardsInBatch, cardDictionary]);
+
+  const getBatchTotalEur = (cards: CardInstance[]) => {
+    return cards.reduce((sum, inst) => {
+      if (inst.is_proxy) return sum;
+      const meta = cardDictionary.get(inst.card_name.toLowerCase()) || cardDictionary.get(inst.oracle_id) || db.getCard(inst.card_name);
+      return sum + (meta?.price_eur || 0);
+    }, 0);
+  };
+
   const currentBatchCoordinate = selectedUnit && selectedDrawer && selectedBatch !== null 
     ? formatLocationId(selectedUnit, selectedDrawer, selectedBatch) 
     : null;
@@ -552,7 +580,7 @@ export const SkeuomorphicViewer: React.FC = () => {
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <div>
               <h1 className="text-lg font-bold text-white flex items-center gap-2">
-                <Boxes className="h-5 w-5 text-amber-400" />
+                <Boxes className="h-5 w-5 text-theme-accent" />
                 Physical Chaos Cabinet ({unitsList.length} Units × 3 Drawers)
               </h1>
               <p className="text-xs text-slate-400 mt-0.5">
@@ -562,7 +590,7 @@ export const SkeuomorphicViewer: React.FC = () => {
 
             <button
               onClick={handleAddUnit}
-              className="self-start sm:self-auto px-3 py-1.5 rounded-xl bg-gradient-to-r from-amber-600/30 to-amber-700/30 hover:from-amber-600/40 hover:to-amber-500/40 border border-amber-500/50 hover:border-amber-400 text-amber-300 font-mono text-xs font-bold flex items-center gap-1.5 shadow-md transition cursor-pointer"
+              className="self-start sm:self-auto px-3 py-1.5 rounded-xl bg-theme-accent-subtle hover:brightness-110 border border-theme-accent-subtle hover:border-theme-accent text-theme-accent font-mono text-xs font-bold flex items-center gap-1.5 shadow-md transition cursor-pointer"
             >
               <Plus className="h-3.5 w-3.5" />
               <span>+ Add Unit {unitCount + 1}</span>
@@ -592,22 +620,22 @@ export const SkeuomorphicViewer: React.FC = () => {
                           key={d}
                           type="button"
                           onClick={() => handleOpenDrawer(u, d)}
-                          className="group relative bg-gradient-to-b from-neutral-800 via-neutral-850 to-neutral-900 hover:from-neutral-750 hover:to-neutral-800 border-2 border-stone-700/80 hover:border-amber-500/80 rounded-xl p-3 sm:p-4 text-center shadow-lg hover:shadow-amber-500/10 sm:hover:-translate-y-0.5 active:scale-[0.98] transition-all cursor-pointer flex flex-col items-center justify-between min-h-[82px] sm:min-h-[96px] touch-manipulation"
+                          className="group relative bg-gradient-to-b from-neutral-800 via-neutral-850 to-neutral-900 hover:from-neutral-750 hover:to-neutral-800 border-2 border-stone-700/80 hover:border-theme-accent rounded-xl p-3 sm:p-4 text-center shadow-lg hover:shadow-theme-accent-glow sm:hover:-translate-y-0.5 active:scale-[0.98] transition-all cursor-pointer flex flex-col items-center justify-between min-h-[82px] sm:min-h-[96px] touch-manipulation"
                         >
                           {/* Stamped Brass Drawer Label Plate */}
-                          <div className="bg-gradient-to-b from-amber-600/30 to-amber-900/40 border border-amber-500/40 rounded px-2.5 py-0.5 shadow-inner pointer-events-none">
-                            <span className="font-mono-coordinate font-black text-amber-300 text-xs sm:text-sm tracking-wider">
+                          <div className="bg-theme-accent-subtle border border-theme-accent-subtle rounded px-2.5 py-0.5 shadow-inner pointer-events-none">
+                            <span className="font-mono-coordinate font-black text-theme-accent text-xs sm:text-sm tracking-wider">
                               {u}.{d}
                             </span>
                           </div>
 
                           {/* Recessed Metal Drawer Handle Pull */}
-                          <div className="w-12 sm:w-16 h-2 sm:h-2.5 rounded-full bg-gradient-to-b from-stone-950 to-neutral-800 border border-stone-700 shadow-inner my-1 group-hover:bg-amber-500/30 transition-colors pointer-events-none" />
+                          <div className="w-12 sm:w-16 h-2 sm:h-2.5 rounded-full bg-gradient-to-b from-stone-950 to-neutral-800 border border-stone-700 shadow-inner my-1 group-hover:bg-theme-accent-subtle transition-colors pointer-events-none" />
 
                           {/* Batch & Card Count Badge */}
                           <div className="text-[10px] sm:text-[11px] font-mono text-stone-400 pointer-events-none">
                             {totalCards > 0 ? (
-                              <span className="text-amber-400/90 font-bold">
+                              <span className="text-theme-accent font-bold">
                                 {totalCards} cards ({batchCount} b)
                               </span>
                             ) : (
@@ -626,7 +654,7 @@ export const SkeuomorphicViewer: React.FC = () => {
             <div className="flex items-center justify-between pt-2 px-1 border-t border-stone-800/60 mt-3">
               <button
                 onClick={handleAddUnit}
-                className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-amber-600/20 to-amber-800/30 hover:from-amber-600/30 hover:to-amber-700/40 border border-amber-500/40 hover:border-amber-400 text-amber-300 font-mono text-xs font-bold flex items-center gap-2 shadow transition cursor-pointer"
+                className="px-3.5 py-2 rounded-xl bg-theme-accent-subtle hover:brightness-110 border border-theme-accent-subtle hover:border-theme-accent text-theme-accent font-mono text-xs font-bold flex items-center gap-2 shadow transition cursor-pointer"
               >
                 <Plus className="h-4 w-4" />
                 <span>Add Storage Unit {unitCount + 1}</span>
@@ -759,9 +787,14 @@ export const SkeuomorphicViewer: React.FC = () => {
               <span className="text-xs font-mono uppercase text-slate-400 font-bold block">
                 INSIDE OPEN DRAWER:
               </span>
-              <span className="text-lg font-black text-amber-400 font-mono-coordinate">
-                Unit {selectedUnit} ➔ Drawer {selectedDrawer}
-              </span>
+              <div className="flex items-center justify-end gap-2.5">
+                <span className="text-lg font-black text-theme-accent font-mono-coordinate">
+                  Unit {selectedUnit} ➔ Drawer {selectedDrawer}
+                </span>
+                <span className="px-2.5 py-0.5 rounded-lg bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 font-mono font-bold text-xs sm:text-sm shadow-sm" title="Total monetary value of cards in this drawer">
+                  €{drawerTotalEur.toFixed(2)}
+                </span>
+              </div>
             </div>
           </div>
 
@@ -780,20 +813,23 @@ export const SkeuomorphicViewer: React.FC = () => {
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 sm:gap-4">
                 {activeBatchesInDrawer.map(([bIndex, batchCards]) => {
                   const coordStr = `${selectedUnit}.${selectedDrawer}.${String(bIndex).padStart(2, '0')}`;
+                  const batchVal = getBatchTotalEur(batchCards);
 
                   return (
                     <button
                       key={bIndex}
                       type="button"
                       onClick={() => handleOpenBatch(bIndex)}
-                      className="group relative bg-gradient-to-b from-amber-700/20 via-neutral-900 to-neutral-950 hover:from-amber-600/30 hover:to-neutral-900 border-2 border-stone-700 hover:border-amber-500 rounded-2xl p-4 text-left shadow-lg hover:shadow-amber-500/10 sm:hover:-translate-y-1 active:scale-[0.98] transition-all cursor-pointer flex flex-col justify-between h-36 touch-manipulation"
+                      className="group relative bg-gradient-to-b from-stone-900 to-neutral-950 hover:from-neutral-850 hover:to-neutral-900 border-2 border-stone-700 hover:border-theme-accent rounded-2xl p-4 text-left shadow-lg hover:shadow-theme-accent-glow sm:hover:-translate-y-1 active:scale-[0.98] transition-all cursor-pointer flex flex-col justify-between h-36 touch-manipulation"
                     >
                       {/* Top Physical Divider Tab */}
                       <div className="flex items-center justify-between w-full pointer-events-none">
-                        <span className="px-2 py-0.5 rounded bg-amber-500/20 border border-amber-500/40 text-amber-300 font-mono-coordinate font-black text-xs">
+                        <span className="px-2 py-0.5 rounded bg-theme-accent-subtle border border-theme-accent-subtle text-theme-accent font-mono-coordinate font-black text-xs">
                           {coordStr}
                         </span>
-                        <span className="h-2 w-2 rounded-full bg-amber-400 animate-pulse" />
+                        <span className="text-emerald-400 font-mono font-bold text-[11px] bg-slate-950/80 px-1.5 py-0.5 rounded border border-emerald-950/60">
+                          €{batchVal.toFixed(2)}
+                        </span>
                       </div>
 
                       {/* Stack Texture Line */}
@@ -837,9 +873,14 @@ export const SkeuomorphicViewer: React.FC = () => {
               <span className="text-xs font-mono uppercase text-slate-400 font-bold block">
                 INSPECTING BATCH:
               </span>
-              <span className="text-lg font-black text-amber-400 font-mono-coordinate">
-                {currentBatchCoordinate} ({activeCardsInBatch.length} Cards)
-              </span>
+              <div className="flex items-center justify-end gap-2.5">
+                <span className="text-lg font-black text-theme-accent font-mono-coordinate">
+                  {currentBatchCoordinate} ({activeCardsInBatch.length} Cards)
+                </span>
+                <span className="px-2.5 py-0.5 rounded-lg bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 font-mono font-bold text-xs sm:text-sm shadow-sm" title="Total monetary value of cards in this batch">
+                  €{batchTotalEur.toFixed(2)}
+                </span>
+              </div>
             </div>
           </div>
 
@@ -847,14 +888,14 @@ export const SkeuomorphicViewer: React.FC = () => {
           <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-2xl space-y-4">
             {/* Inline batch-level undo banner if an action was just performed in this batch */}
             {activeUndo && activeUndo.previousLocation === currentBatchCoordinate && (
-              <div className="p-3 rounded-2xl bg-amber-500/10 border-2 border-amber-500/40 flex items-center justify-between gap-3 text-xs animate-in fade-in">
-                <div className="flex items-center gap-2 text-amber-300 min-w-0">
-                  <RotateCcw className="h-4 w-4 shrink-0 text-amber-400" />
+              <div className="p-3 rounded-2xl bg-theme-accent-subtle border-2 border-theme-accent-subtle flex items-center justify-between gap-3 text-xs animate-in fade-in">
+                <div className="flex items-center gap-2 text-theme-accent min-w-0">
+                  <RotateCcw className="h-4 w-4 shrink-0 text-theme-accent" />
                   <span className="truncate">{activeUndo.message}</span>
                 </div>
                 <button
                   onClick={handleUndo}
-                  className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold font-mono text-xs flex items-center gap-1 shadow cursor-pointer shrink-0"
+                  className="px-3 py-1.5 rounded-xl bg-theme-accent hover:brightness-110 text-slate-950 font-bold font-mono text-xs flex items-center gap-1 shadow cursor-pointer shrink-0"
                 >
                   <Undo2 className="h-3.5 w-3.5" />
                   <span>UNDO ↺</span>
@@ -877,7 +918,7 @@ export const SkeuomorphicViewer: React.FC = () => {
                       className={`bg-slate-950 border rounded-2xl shadow-lg transition flex flex-col justify-between relative ${
                         cardMenuOpenId === inst.instance_id ? 'z-30 overflow-visible' : 'overflow-hidden'
                       } ${
-                        inst.is_for_sale ? 'border-for-sale' : 'border-slate-800 hover:border-amber-500/60'
+                        inst.is_for_sale ? 'border-for-sale' : 'border-slate-800 hover:border-theme-accent'
                       }`}
                     >
                       {/* Card Image */}
@@ -904,8 +945,8 @@ export const SkeuomorphicViewer: React.FC = () => {
                             }}
                             className={`h-6 w-6 rounded-full flex items-center justify-center transition shadow-lg cursor-pointer ${
                               cardMenuOpenId === inst.instance_id
-                                ? 'bg-amber-500 text-slate-950 font-black ring-2 ring-amber-300'
-                                : 'bg-slate-950/85 hover:bg-slate-900 text-white border border-slate-700/80 hover:border-amber-400'
+                                ? 'bg-theme-accent text-slate-950 font-black ring-2 ring-theme-accent/60'
+                                : 'bg-slate-950/85 hover:bg-slate-900 text-white border border-slate-700/80 hover:border-theme-accent'
                             }`}
                             title="Card options"
                           >
@@ -945,7 +986,7 @@ export const SkeuomorphicViewer: React.FC = () => {
                                 className="w-full px-2.5 py-1.5 rounded-lg text-left flex items-center justify-between hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
                               >
                                 <span className="flex items-center gap-1.5">
-                                  <Bookmark className="h-3.5 w-3.5 text-amber-400" />
+                                  <Bookmark className="h-3.5 w-3.5 text-theme-accent" />
                                   <span>Add to List...</span>
                                 </span>
                                 <ChevronRight className={`h-3 w-3 text-slate-400 transition-transform ${listSubmenuOpenId === inst.instance_id ? 'rotate-90' : ''}`} />
@@ -967,7 +1008,7 @@ export const SkeuomorphicViewer: React.FC = () => {
                                   <button
                                     type="button"
                                     onClick={() => handleQuickCreateListAndAdd(inst.card_name)}
-                                    className="w-full px-2 py-1 rounded text-left flex items-center gap-1 text-amber-400 hover:text-amber-300 hover:bg-slate-800 transition cursor-pointer text-[11px] font-semibold"
+                                    className="w-full px-2 py-1 rounded text-left flex items-center gap-1 text-theme-accent hover:brightness-110 hover:bg-slate-800 transition cursor-pointer text-[11px] font-semibold"
                                   >
                                     <Plus className="h-3 w-3" />
                                     <span>+ New List</span>
@@ -1017,7 +1058,7 @@ export const SkeuomorphicViewer: React.FC = () => {
                               className="py-1 px-2 rounded-lg bg-slate-800 hover:bg-slate-750 text-slate-300 hover:text-white border border-slate-700 font-mono text-[10px] font-bold flex items-center justify-center gap-1 transition cursor-pointer"
                               title="Relocate to another drawer batch"
                             >
-                              <MapPin className="h-3 w-3 text-amber-400" />
+                              <MapPin className="h-3 w-3 text-theme-accent" />
                               <span>Relocate</span>
                             </button>
 
@@ -1127,8 +1168,8 @@ export const SkeuomorphicViewer: React.FC = () => {
                             }}
                             className={`h-6 w-6 rounded-full flex items-center justify-center transition shadow-lg cursor-pointer ${
                               cardMenuOpenId === inst.instance_id
-                                ? 'bg-amber-500 text-slate-950 font-black ring-2 ring-amber-300'
-                                : 'bg-slate-950/85 hover:bg-slate-900 text-white border border-slate-700/80 hover:border-amber-400'
+                                ? 'bg-theme-accent text-slate-950 font-black ring-2 ring-theme-accent/60'
+                                : 'bg-slate-950/85 hover:bg-slate-900 text-white border border-slate-700/80 hover:border-theme-accent'
                             }`}
                             title="Card options"
                           >
@@ -1168,7 +1209,7 @@ export const SkeuomorphicViewer: React.FC = () => {
                                 className="w-full px-2.5 py-1.5 rounded-lg text-left flex items-center justify-between hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
                               >
                                 <span className="flex items-center gap-1.5">
-                                  <Bookmark className="h-3.5 w-3.5 text-amber-400" />
+                                  <Bookmark className="h-3.5 w-3.5 text-theme-accent" />
                                   <span>Add to List...</span>
                                 </span>
                                 <ChevronRight className={`h-3 w-3 text-slate-400 transition-transform ${listSubmenuOpenId === inst.instance_id ? 'rotate-90' : ''}`} />
@@ -1190,7 +1231,7 @@ export const SkeuomorphicViewer: React.FC = () => {
                                   <button
                                     type="button"
                                     onClick={() => handleQuickCreateListAndAdd(inst.card_name)}
-                                    className="w-full px-2 py-1 rounded text-left flex items-center gap-1 text-amber-400 hover:text-amber-300 hover:bg-slate-800 transition cursor-pointer text-[11px] font-semibold"
+                                    className="w-full px-2 py-1 rounded text-left flex items-center gap-1 text-theme-accent hover:brightness-110 hover:bg-slate-800 transition cursor-pointer text-[11px] font-semibold"
                                   >
                                     <Plus className="h-3 w-3" />
                                     <span>+ New List</span>
@@ -1245,7 +1286,7 @@ export const SkeuomorphicViewer: React.FC = () => {
                           ) : (
                             <button
                               onClick={() => handleOpenReturnModal(inst)}
-                              className="flex-1 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-mono font-bold text-[11px] flex items-center justify-center gap-1 shadow cursor-pointer transition"
+                              className="flex-1 py-1.5 rounded-lg bg-theme-accent hover:bg-theme-accent-hover text-slate-950 font-mono font-bold text-[11px] flex items-center justify-center gap-1 shadow cursor-pointer transition"
                               title="Return card to physical Chaos drawer"
                             >
                               <RotateCcw className="h-3 w-3" />
@@ -1355,8 +1396,8 @@ export const SkeuomorphicViewer: React.FC = () => {
                             }}
                             className={`h-6 w-6 rounded-full flex items-center justify-center transition shadow-lg cursor-pointer ${
                               cardMenuOpenId === inst.instance_id
-                                ? 'bg-amber-500 text-slate-950 font-black ring-2 ring-amber-300'
-                                : 'bg-slate-950/85 hover:bg-slate-900 text-white border border-slate-700/80 hover:border-amber-400'
+                                ? 'bg-theme-accent text-slate-950 font-black ring-2 ring-theme-accent/60'
+                                : 'bg-slate-950/85 hover:bg-slate-900 text-white border border-slate-700/80 hover:border-theme-accent'
                             }`}
                             title="Card options"
                           >
@@ -1396,7 +1437,7 @@ export const SkeuomorphicViewer: React.FC = () => {
                                 className="w-full px-2.5 py-1.5 rounded-lg text-left flex items-center justify-between hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
                               >
                                 <span className="flex items-center gap-1.5">
-                                  <Bookmark className="h-3.5 w-3.5 text-amber-400" />
+                                  <Bookmark className="h-3.5 w-3.5 text-theme-accent" />
                                   <span>Add to List...</span>
                                 </span>
                                 <ChevronRight className={`h-3 w-3 text-slate-400 transition-transform ${listSubmenuOpenId === inst.instance_id ? 'rotate-90' : ''}`} />
@@ -1418,7 +1459,7 @@ export const SkeuomorphicViewer: React.FC = () => {
                                   <button
                                     type="button"
                                     onClick={() => handleQuickCreateListAndAdd(inst.card_name)}
-                                    className="w-full px-2 py-1 rounded text-left flex items-center gap-1 text-amber-400 hover:text-amber-300 hover:bg-slate-800 transition cursor-pointer text-[11px] font-semibold"
+                                    className="w-full px-2 py-1 rounded text-left flex items-center gap-1 text-theme-accent hover:brightness-110 hover:bg-slate-800 transition cursor-pointer text-[11px] font-semibold"
                                   >
                                     <Plus className="h-3 w-3" />
                                     <span>+ New List</span>
@@ -1488,7 +1529,7 @@ export const SkeuomorphicViewer: React.FC = () => {
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-sm w-full p-5 space-y-4 shadow-2xl">
             <h3 className="text-base font-bold text-white flex items-center gap-2">
-              <RotateCcw className="h-4 w-4 text-amber-400" />
+              <RotateCcw className="h-4 w-4 text-theme-accent" />
               <span>Return {returningInstance.card_name} to Drawers</span>
             </h3>
 
@@ -1565,7 +1606,7 @@ export const SkeuomorphicViewer: React.FC = () => {
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-sm w-full p-5 space-y-4 shadow-2xl">
             <h3 className="text-base font-bold text-white flex items-center gap-2">
-              <MapPin className="h-4 w-4 text-amber-400" />
+              <MapPin className="h-4 w-4 text-theme-accent" />
               <span>Relocate {relocatingInstance.card_name}</span>
             </h3>
             <p className="text-xs text-stone-400">
@@ -1643,10 +1684,10 @@ export const SkeuomorphicViewer: React.FC = () => {
       {/* FLOATING UNDO TOAST NOTIFICATION */}
       {activeUndo && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 w-full max-w-lg px-4 pointer-events-auto animate-in slide-in-from-bottom duration-200">
-          <div className="bg-gradient-to-r from-stone-900 via-neutral-900 to-stone-900 border-2 border-amber-500/80 rounded-2xl shadow-2xl p-3.5 flex flex-col gap-2.5 text-xs text-white">
+          <div className="bg-gradient-to-r from-stone-900 via-neutral-900 to-stone-900 border-2 border-theme-accent rounded-2xl shadow-2xl p-3.5 flex flex-col gap-2.5 text-xs text-white">
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-2.5 min-w-0">
-                <div className="p-1.5 rounded-lg bg-amber-500/20 text-amber-400 shrink-0">
+                <div className="p-1.5 rounded-lg bg-theme-accent-subtle text-theme-accent shrink-0">
                   <RotateCcw className="h-4 w-4" />
                 </div>
                 <div className="min-w-0">
@@ -1659,7 +1700,7 @@ export const SkeuomorphicViewer: React.FC = () => {
               <div className="flex items-center gap-2 shrink-0">
                 <button
                   onClick={handleUndo}
-                  className="px-3.5 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 active:bg-amber-600 text-stone-950 font-black font-mono text-xs flex items-center gap-1.5 shadow-lg cursor-pointer transition transform active:scale-95"
+                  className="px-3.5 py-1.5 rounded-xl bg-theme-accent hover:brightness-110 active:opacity-90 text-stone-950 font-black font-mono text-xs flex items-center gap-1.5 shadow-lg cursor-pointer transition transform active:scale-95"
                 >
                   <Undo2 className="h-3.5 w-3.5" />
                   <span>UNDO ↺</span>
@@ -1676,7 +1717,7 @@ export const SkeuomorphicViewer: React.FC = () => {
             {/* Countdown progress bar */}
             <div className="w-full bg-stone-800 rounded-full h-1 overflow-hidden">
               <div 
-                className="bg-amber-400 h-full transition-all duration-100 ease-linear"
+                className="bg-theme-accent h-full transition-all duration-100 ease-linear"
                 style={{ width: `${undoProgress}%` }}
               />
             </div>
@@ -1688,13 +1729,13 @@ export const SkeuomorphicViewer: React.FC = () => {
       {listToast && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 animate-in fade-in slide-in-from-bottom-4 duration-200">
           <div className="bg-slate-900 border border-slate-700 text-white px-4 py-2.5 rounded-2xl shadow-2xl flex items-center gap-3 text-xs sm:text-sm font-semibold backdrop-blur-md">
-            <Bookmark className="h-4 w-4 text-amber-400 shrink-0" />
+            <Bookmark className="h-4 w-4 text-theme-accent shrink-0" />
             <span>{listToast.message}</span>
             {listToast.onUndo && (
               <button
                 type="button"
                 onClick={listToast.onUndo}
-                className="ml-2 px-2.5 py-1 rounded-lg bg-amber-500/20 text-amber-300 hover:bg-amber-500/30 text-xs font-bold transition cursor-pointer"
+                className="ml-2 px-2.5 py-1 rounded-lg bg-theme-accent-subtle text-theme-accent hover:bg-theme-accent/30 text-xs font-bold transition cursor-pointer border border-theme-accent-subtle"
               >
                 Undo
               </button>

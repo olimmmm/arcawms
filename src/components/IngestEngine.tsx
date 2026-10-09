@@ -464,10 +464,10 @@ export const IngestEngine: React.FC = () => {
               </button>
               <button
                 onClick={handleAutoAllocateNext}
-                className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-mono text-amber-300 hover:text-amber-200 border border-slate-700 flex items-center gap-1.5 shadow transition cursor-pointer"
+                className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-mono text-theme-accent hover:brightness-110 border border-slate-700 flex items-center gap-1.5 shadow transition cursor-pointer"
                 title="Automatically select the first available Unit and Drawer with strictly fewer than 12 non-empty batches"
               >
-                <Sparkles className="h-3.5 w-3.5 text-amber-400" />
+                <Sparkles className="h-3.5 w-3.5 text-theme-accent" />
                 <span className="hidden sm:inline">Smart Auto</span>
               </button>
             </div>
@@ -579,7 +579,7 @@ export const IngestEngine: React.FC = () => {
           onChange={(e) => setRawText(e.target.value)}
           rows={7}
           placeholder="4 Lightning Bolt&#10;3 Carrion Feeder (EMA) 84&#10;1 Sol Ring..."
-          className="w-full bg-slate-950 border border-slate-800 rounded-xl p-4 text-sm font-mono text-slate-200 placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-amber-500 font-sans"
+          className="w-full bg-slate-950 border border-slate-800 rounded-xl p-4 text-sm font-mono text-slate-200 placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-theme-primary focus:border-theme-primary font-sans"
         />
 
         <button
@@ -690,7 +690,7 @@ export const IngestEngine: React.FC = () => {
                         {item.details || (item.from_location ? `${item.from_location} ➔ ${item.to_location}` : item.to_location)}
                       </span>
                       {item.undone && (
-                        <span className="ml-2 text-[10px] font-mono text-amber-400 font-bold bg-amber-400/10 px-1.5 py-0.5 rounded border border-amber-400/30">
+                        <span className="ml-2 text-[10px] font-mono text-theme-accent font-bold bg-theme-accent-subtle px-1.5 py-0.5 rounded border border-theme-accent-subtle">
                           Undone
                         </span>
                       )}
@@ -707,12 +707,12 @@ export const IngestEngine: React.FC = () => {
                       onClick={() => handleToggleUndo(item.id)}
                       className={`px-2.5 py-1 rounded-lg text-xs font-mono font-bold flex items-center gap-1.5 shadow transition cursor-pointer ${
                         item.undone
-                          ? 'bg-amber-500/20 text-amber-300 hover:bg-amber-500/30 border border-amber-500/40'
+                          ? 'bg-theme-accent-subtle text-theme-accent hover:bg-theme-accent/30 border border-theme-accent-subtle'
                           : 'bg-slate-800 text-slate-200 hover:bg-slate-700 hover:text-white border border-slate-700'
                       }`}
                       title={item.undone ? 'Undo this undo (Redo)' : 'Undo this action (takes cards back to where they were)'}
                     >
-                      <RotateCcw className={`h-3 w-3 ${item.undone ? 'rotate-180 text-amber-400' : 'text-slate-400'}`} />
+                      <RotateCcw className={`h-3 w-3 ${item.undone ? 'rotate-180 text-theme-accent' : 'text-slate-400'}`} />
                       <span>{item.undone ? 'Redo ↻' : 'Undo ↺'}</span>
                     </button>
                   </div>

@@ -8,11 +8,14 @@ import {
   Trash2,
   Layers,
   ShoppingBag,
-  Undo2
+  Undo2,
+  Copy,
+  Sparkles,
+  X
 } from 'lucide-react';
 import { CardInstance, PickItem, ScryfallCard } from '../types';
 import { db } from '../services/db';
-import { generatePickRoute, parseDecklistText } from '../services/pickPath';
+import { generatePickRoute, parseDecklistText, formatAsMtgText } from '../services/pickPath';
 import { playSound, triggerHaptic } from '../services/audio';
 import { getScryfallImageFallback } from '../services/scryfall';
 
@@ -38,6 +41,7 @@ export const PickPathRunner: React.FC<PickPathRunnerProps> = ({ pendingDecklist,
   const [phase, setPhase] = useState<'setup' | 'running'>('setup');
   const [decklistText, setDecklistText] = useState('');
   const [route, setRoute] = useState<PickItem[]>([]);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   useEffect(() => {
     if (pendingDecklist) {
@@ -139,26 +143,63 @@ export const PickPathRunner: React.FC<PickPathRunnerProps> = ({ pendingDecklist,
     setRoute(prev => prev.map(r => r.id === item.id ? { ...r, status: 'skipped' } : r));
   };
 
-  const inChaosItems = route.filter(i => i.inChaos);
-  const alreadyInDecks = route.filter(i => !i.inChaos && i.status !== 'missing');
-  const missingItems = route.filter(i => i.status === 'missing');
+  // 4 Waterfall Category Splits
+  const inChaosItems = useMemo(() => route.filter(i => i.category === 'units' || (i.inChaos && !i.category)), [route]);
+  const alreadyInDecks = useMemo(() => route.filter(i => i.category === 'decks' || (!i.inChaos && !i.is_proxy && i.status !== 'missing' && !i.category)), [route]);
+  const proxyItems = useMemo(() => route.filter(i => i.category === 'proxies' || (Boolean(i.is_proxy) && i.status !== 'missing')), [route]);
+  const missingItems = useMemo(() => route.filter(i => i.category === 'missing' || i.status === 'missing'), [route]);
+
+  const handleCopyCategory = (cat: 'units' | 'decks' | 'proxies' | 'missing', label: string) => {
+    playSound('click');
+    triggerHaptic('light');
+    let itemsToCopy: PickItem[] = [];
+    if (cat === 'units') itemsToCopy = inChaosItems;
+    else if (cat === 'decks') itemsToCopy = alreadyInDecks;
+    else if (cat === 'proxies') itemsToCopy = proxyItems;
+    else if (cat === 'missing') itemsToCopy = missingItems;
+
+    if (itemsToCopy.length === 0) {
+      setToastMessage(`No cards in ${label} to copy.`);
+      setTimeout(() => setToastMessage(null), 3000);
+      return;
+    }
+
+    const text = formatAsMtgText(itemsToCopy);
+    navigator.clipboard.writeText(text);
+    setToastMessage(`Copied ${itemsToCopy.length} cards in ${label} to clipboard!`);
+    setTimeout(() => setToastMessage(null), 3500);
+  };
 
   const processedCount = inChaosItems.filter(i => i.status === 'pulled_brew' || i.status === 'pulled_trade').length;
   const totalToPull = inChaosItems.length;
 
   return (
     <div className="max-w-4xl mx-auto px-4 sm:px-6 py-6 space-y-6">
+      {/* Toast Notification */}
+      {toastMessage && (
+        <div className="fixed bottom-6 right-6 z-50 bg-slate-900/95 border border-slate-700 text-slate-100 px-4 py-3 rounded-xl shadow-2xl flex items-center gap-2 text-xs font-mono backdrop-blur animate-in fade-in slide-in-from-bottom-2">
+          <Sparkles className="h-4 w-4 text-theme-accent shrink-0" />
+          <span>{toastMessage}</span>
+          <button 
+            onClick={() => setToastMessage(null)}
+            className="ml-2 text-slate-500 hover:text-white cursor-pointer"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
+
       {/* SETUP PHASE */}
       {phase === 'setup' && (
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 sm:p-6 shadow-xl space-y-4">
           <div className="flex items-center justify-between">
             <h1 className="text-lg font-bold text-white flex items-center gap-2">
-              <Compass className="h-5 w-5 text-amber-400" />
-              Pick-Path Runner (Non-Backtracking Mass Pull)
+              <Compass className="h-5 w-5 text-theme-accent" />
+              <span>Pick-Path Runner (Non-Backtracking Mass Pull)</span>
             </h1>
             <button
               onClick={() => { setDecklistText(SAMPLE_WANTS); playSound('click'); }}
-              className="text-xs text-amber-400 hover:text-amber-300 font-mono underline"
+              className="text-xs text-theme-accent hover:text-theme-accent-hover font-mono underline cursor-pointer"
             >
               Load Sample List
             </button>
@@ -173,12 +214,12 @@ export const PickPathRunner: React.FC<PickPathRunnerProps> = ({ pendingDecklist,
             onChange={(e) => setDecklistText(e.target.value)}
             rows={10}
             placeholder="4 Lightning Bolt&#10;1 Sol Ring&#10;1 Brainstorm..."
-            className="w-full bg-slate-950 border border-slate-800 rounded-xl p-4 text-sm font-mono text-slate-200 placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-amber-500 font-sans"
+            className="w-full bg-slate-950 border border-slate-800 rounded-xl p-4 text-sm font-mono text-slate-200 placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-theme-primary focus:border-theme-primary font-sans"
           />
 
           <button
             onClick={handleStartRun}
-            className="w-full py-3.5 rounded-xl bg-amber-500 hover:bg-amber-400 active:bg-amber-600 text-slate-950 font-black text-sm tracking-wide shadow-lg shadow-amber-500/20 flex items-center justify-center gap-2 cursor-pointer transition"
+            className="w-full py-3.5 rounded-xl bg-theme-primary hover:brightness-110 active:brightness-95 text-slate-950 font-black text-sm tracking-wide shadow-lg shadow-theme-primary/20 flex items-center justify-center gap-2 cursor-pointer transition"
           >
             <Play className="h-4 w-4 fill-current" />
             <span>GENERATE OPTIMIZED PICK PATH</span>
@@ -192,8 +233,8 @@ export const PickPathRunner: React.FC<PickPathRunnerProps> = ({ pendingDecklist,
           {/* Progress Header */}
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-lg flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <span className="text-xs font-mono uppercase font-bold text-amber-400">
-                PULLED {processedCount} OF {totalToPull}
+              <span className="text-xs font-mono uppercase font-bold text-theme-accent">
+                PULLED {processedCount} OF {totalToPull} IN UNITS
               </span>
               <div className="w-32 sm:w-48 bg-slate-950 h-2.5 rounded-full overflow-hidden border border-slate-800">
                 <div
@@ -205,14 +246,75 @@ export const PickPathRunner: React.FC<PickPathRunnerProps> = ({ pendingDecklist,
 
             <button
               onClick={() => { setPhase('setup'); playSound('click'); }}
-              className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-slate-300 flex items-center gap-1.5"
+              className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-slate-300 flex items-center gap-1.5 cursor-pointer"
             >
               <RotateCcw className="h-3.5 w-3.5" />
               <span>Reset List</span>
             </button>
           </div>
 
-          {/* Linear Route Checklist */}
+          {/* Clipboard Export Toolbar (4 Distinct MTG Text Exports) */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3.5 sm:p-4 shadow-lg space-y-2.5">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-mono font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                <Copy className="h-3.5 w-3.5 text-theme-accent" />
+                <span>Copy to Clipboard (Standard MTG Text)</span>
+              </span>
+              <span className="text-[11px] text-slate-500 font-mono hidden sm:inline">Single-click export</span>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {/* 1. Cards located in Units */}
+              <button
+                type="button"
+                onClick={() => handleCopyCategory('units', 'Units (Drawers)')}
+                disabled={inChaosItems.length === 0}
+                className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-theme-accent-subtle hover:bg-theme-accent/25 text-theme-accent text-xs font-bold border border-theme-accent-subtle transition disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer shadow-sm"
+                title="Copy cards located in Units (Chaos Drawers)"
+              >
+                <Copy className="h-3.5 w-3.5 shrink-0" />
+                <span className="truncate">Units ({inChaosItems.length})</span>
+              </button>
+
+              {/* 2. Cards located in Decks/Brewing and NOT in Units */}
+              <button
+                type="button"
+                onClick={() => handleCopyCategory('decks', 'Decks / Brewing')}
+                disabled={alreadyInDecks.length === 0}
+                className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-blue-500/15 hover:bg-blue-500/25 text-blue-300 text-xs font-bold border border-blue-500/30 transition disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer shadow-sm"
+                title="Copy cards located in Decks/Brewing and NOT in Units"
+              >
+                <Copy className="h-3.5 w-3.5 shrink-0" />
+                <span className="truncate">In Decks ({alreadyInDecks.length})</span>
+              </button>
+
+              {/* 3. Cards located in Proxies and NOT in Units nor Decks/Brewing */}
+              <button
+                type="button"
+                onClick={() => handleCopyCategory('proxies', 'Proxies')}
+                disabled={proxyItems.length === 0}
+                className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-purple-500/15 hover:bg-purple-500/25 text-purple-300 text-xs font-bold border border-purple-500/30 transition disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer shadow-sm"
+                title="Copy cards located in Proxies and NOT in Units nor Decks/Brewing"
+              >
+                <Copy className="h-3.5 w-3.5 shrink-0" />
+                <span className="truncate">Proxies ({proxyItems.length})</span>
+              </button>
+
+              {/* 4. Cards NOT in collection at all */}
+              <button
+                type="button"
+                onClick={() => handleCopyCategory('missing', 'Unowned')}
+                disabled={missingItems.length === 0}
+                className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 text-xs font-bold border border-rose-500/30 transition disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer shadow-sm"
+                title="Copy cards NOT in collection at all"
+              >
+                <Copy className="h-3.5 w-3.5 shrink-0" />
+                <span className="truncate">Unowned ({missingItems.length})</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Linear Route Checklist (Units) */}
           <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl divide-y divide-slate-800">
             {inChaosItems.length === 0 ? (
               <div className="p-8 text-center text-slate-500 text-xs">
@@ -233,7 +335,7 @@ export const PickPathRunner: React.FC<PickPathRunnerProps> = ({ pendingDecklist,
                         : isPulledTrade
                         ? 'bg-rose-950/20 border-l-4 border-l-rose-500'
                         : isSkipped 
-                        ? 'bg-amber-950/10' 
+                        ? 'bg-slate-850/60' 
                         : 'hover:bg-slate-850'
                     }`}
                   >
@@ -241,7 +343,7 @@ export const PickPathRunner: React.FC<PickPathRunnerProps> = ({ pendingDecklist,
                       <span className="text-xs font-mono text-slate-500 w-5">#{idx + 1}</span>
 
                       {/* Visual Coordinate Badge */}
-                      <div className="px-3 py-1.5 rounded-lg bg-amber-500/20 text-amber-400 font-mono-coordinate font-black text-sm border border-amber-500/40 flex items-center gap-1 shrink-0">
+                      <div className="px-3 py-1.5 rounded-lg bg-theme-accent-subtle text-theme-accent font-mono-coordinate font-black text-sm border border-theme-accent-subtle flex items-center gap-1 shrink-0">
                         <MapPin className="h-4 w-4" />
                         <span>{item.location_id}</span>
                       </div>
@@ -305,7 +407,7 @@ export const PickPathRunner: React.FC<PickPathRunnerProps> = ({ pendingDecklist,
                       ) : isSkipped ? (
                         <button
                           onClick={() => handleUndo(item)}
-                          className="px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-300 font-mono text-xs flex items-center gap-1"
+                          className="px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-mono text-xs flex items-center gap-1 cursor-pointer"
                         >
                           <span>SKIPPED (UNDO ↺)</span>
                         </button>
@@ -332,7 +434,7 @@ export const PickPathRunner: React.FC<PickPathRunnerProps> = ({ pendingDecklist,
 
                           <button
                             onClick={() => handleSkip(item)}
-                            className="px-2.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 text-xs font-mono"
+                            className="px-2.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 text-xs font-mono cursor-pointer"
                             title="Skip (leave in drawer)"
                           >
                             <span>SKIP</span>
@@ -349,9 +451,20 @@ export const PickPathRunner: React.FC<PickPathRunnerProps> = ({ pendingDecklist,
           {/* Cards Already in Decks */}
           {alreadyInDecks.length > 0 && (
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-lg space-y-2">
-              <h3 className="text-xs font-mono font-bold text-blue-400 uppercase">
-                ALREADY IN DECKS / BREWING ({alreadyInDecks.length})
-              </h3>
+              <div className="flex items-center justify-between">
+                <h3 className="text-xs font-mono font-bold text-blue-400 uppercase">
+                  ALREADY IN DECKS / BREWING ({alreadyInDecks.length})
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => handleCopyCategory('decks', 'Decks / Brewing')}
+                  className="px-2.5 py-1 rounded-lg bg-blue-500/15 hover:bg-blue-500/25 text-blue-300 text-xs font-semibold border border-blue-500/30 flex items-center gap-1 cursor-pointer"
+                  title="Copy cards in Decks to clipboard"
+                >
+                  <Copy className="h-3 w-3" />
+                  <span>Copy List</span>
+                </button>
+              </div>
               <div className="divide-y divide-slate-800 text-xs">
                 {alreadyInDecks.map(item => (
                   <div key={item.id} className="py-2 flex items-center justify-between text-slate-400">
@@ -363,12 +476,54 @@ export const PickPathRunner: React.FC<PickPathRunnerProps> = ({ pendingDecklist,
             </div>
           )}
 
+          {/* Cards in Proxies */}
+          {proxyItems.length > 0 && (
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-lg space-y-2">
+              <div className="flex items-center justify-between">
+                <h3 className="text-xs font-mono font-bold text-purple-400 uppercase flex items-center gap-1.5">
+                  <Sparkles className="h-3.5 w-3.5" />
+                  <span>PROXIES FOUND ({proxyItems.length})</span>
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => handleCopyCategory('proxies', 'Proxies')}
+                  className="px-2.5 py-1 rounded-lg bg-purple-500/15 hover:bg-purple-500/25 text-purple-300 text-xs font-semibold border border-purple-500/30 flex items-center gap-1 cursor-pointer"
+                  title="Copy proxies to clipboard"
+                >
+                  <Copy className="h-3 w-3" />
+                  <span>Copy List</span>
+                </button>
+              </div>
+              <div className="divide-y divide-slate-800 text-xs">
+                {proxyItems.map(item => (
+                  <div key={item.id} className="py-2 flex items-center justify-between text-slate-400">
+                    <span className="font-medium text-purple-200">{item.card_name}</span>
+                    <span className="font-mono text-purple-400 text-[11px]">
+                      {item.location_id || 'Proxy Box'} • £0.00
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Missing Cards */}
           {missingItems.length > 0 && (
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-lg space-y-2">
-              <h3 className="text-xs font-mono font-bold text-rose-400 uppercase">
-                NOT IN COLLECTION ({missingItems.length})
-              </h3>
+              <div className="flex items-center justify-between">
+                <h3 className="text-xs font-mono font-bold text-rose-400 uppercase">
+                  NOT IN COLLECTION ({missingItems.length})
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => handleCopyCategory('missing', 'Unowned')}
+                  className="px-2.5 py-1 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 text-xs font-semibold border border-rose-500/30 flex items-center gap-1 cursor-pointer"
+                  title="Copy unowned cards to clipboard"
+                >
+                  <Copy className="h-3 w-3" />
+                  <span>Copy List</span>
+                </button>
+              </div>
               <div className="divide-y divide-slate-800 text-xs">
                 {missingItems.map(item => (
                   <div key={item.id} className="py-2 flex items-center justify-between text-slate-400">

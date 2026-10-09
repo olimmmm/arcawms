@@ -179,7 +179,27 @@ export function parseDecklistText(rawText: string): { name: string; count: numbe
 }
 
 /**
- * Generate linear pick route
+ * Helper to group card items by name and output standard MTG text format (e.g. "4 Lightning Bolt\n1 Sol Ring")
+ */
+export function formatAsMtgText(items: { card_name: string; count?: number }[]): string {
+  const counts = new Map<string, number>();
+  for (const item of items) {
+    const name = item.card_name.trim();
+    if (!name) continue;
+    const addCount = typeof item.count === 'number' && item.count > 0 ? item.count : 1;
+    counts.set(name, (counts.get(name) || 0) + addCount);
+  }
+  return Array.from(counts.entries())
+    .map(([name, count]) => `${count} ${name}`)
+    .join('\n');
+}
+
+/**
+ * Generate linear pick route with 4-tier waterfall:
+ * 1. Units (State A - Chaos Drawers)
+ * 2. Decks / Brewing (State B - Real Cards)
+ * 3. Proxies (Proxy Box State P or State B Proxies)
+ * 4. Missing (Unowned)
  */
 export function generatePickRoute(
   wantedList: { name: string; count: number }[],
@@ -201,14 +221,13 @@ export function generatePickRoute(
     const key = wanted.name.toLowerCase();
     const available = instancesByName.get(key) || [];
 
-    // Prioritize instances currently in Chaos Drawers (State A)
+    let needed = wanted.count;
+
+    // 1. Waterfall Tier 1: Cards located in Units (Chaos Drawers, State A)
     const inChaosInstances = available
       .filter(i => i.state === 'A' && !allocated.has(i.instance_id))
       .sort((a, b) => compareLocations(a.location_id, b.location_id));
 
-    let needed = wanted.count;
-
-    // Allocate from chaos drawers
     for (const inst of inChaosInstances) {
       if (needed <= 0) break;
       allocated.add(inst.instance_id);
@@ -227,15 +246,19 @@ export function generatePickRoute(
         batch_index: coord.batch_index,
         status: 'pending',
         inChaos: true,
+        is_proxy: false,
+        category: 'units',
         card_metadata: metadata,
         original_instance: inst
       });
       needed--;
     }
 
-    // Allocate from cards already in decks/brewing
+    // 2. Waterfall Tier 2: Real cards located in Decks / Brewing (State B, non-proxy)
     if (needed > 0) {
-      const inDecksInstances = available.filter(i => i.state === 'B' && !allocated.has(i.instance_id));
+      const inDecksInstances = available.filter(
+        i => i.state === 'B' && !i.is_proxy && !allocated.has(i.instance_id)
+      );
       for (const inst of inDecksInstances) {
         if (needed <= 0) break;
         allocated.add(inst.instance_id);
@@ -249,7 +272,9 @@ export function generatePickRoute(
           oracle_id: inst.oracle_id,
           location_id: null,
           status: 'pending',
-          inChaos: false, // Already out in decks
+          inChaos: false,
+          is_proxy: false,
+          category: 'decks',
           card_metadata: metadata,
           original_instance: inst
         });
@@ -257,7 +282,35 @@ export function generatePickRoute(
       }
     }
 
-    // Unowned
+    // 3. Waterfall Tier 3: Proxies located in Proxy Box (State P) or in Decks (State B with is_proxy)
+    if (needed > 0) {
+      const proxyInstances = available.filter(
+        i => (i.state === 'P' || Boolean(i.is_proxy)) && !allocated.has(i.instance_id)
+      );
+      for (const inst of proxyInstances) {
+        if (needed <= 0) break;
+        allocated.add(inst.instance_id);
+
+        const metadata = cardDictionary.get(inst.card_name.toLowerCase()) || cardDictionary.get(inst.oracle_id);
+
+        route.push({
+          id: `pick-${inst.instance_id}`,
+          card_name: inst.card_name,
+          instance_id: inst.instance_id,
+          oracle_id: inst.oracle_id,
+          location_id: inst.state === 'P' ? 'Proxy Box' : 'Decks / Brewing (Proxy)',
+          status: 'pending',
+          inChaos: false,
+          is_proxy: true,
+          category: 'proxies',
+          card_metadata: metadata,
+          original_instance: inst
+        });
+        needed--;
+      }
+    }
+
+    // 4. Waterfall Tier 4: Cards NOT in collection at all (Unowned / Missing)
     while (needed > 0) {
       const metadata = cardDictionary.get(wanted.name.toLowerCase());
       route.push({
@@ -266,22 +319,33 @@ export function generatePickRoute(
         location_id: null,
         status: 'missing',
         inChaos: false,
+        is_proxy: false,
+        category: 'missing',
         card_metadata: metadata
       });
       needed--;
     }
   }
 
-  // Sort: In-Chaos items first by 3-tier coordinate (Unit -> Drawer -> Batch), then cards already in decks, then missing
+  // Sort: In-Chaos items first by 3-tier coordinate (Unit -> Drawer -> Batch), then Decks, then Proxies, then Missing
+  const categoryOrder: Record<string, number> = {
+    units: 0,
+    decks: 1,
+    proxies: 2,
+    missing: 3
+  };
+
   route.sort((a, b) => {
+    const orderA = categoryOrder[a.category || 'units'] ?? 9;
+    const orderB = categoryOrder[b.category || 'units'] ?? 9;
+
+    if (orderA !== orderB) {
+      return orderA - orderB;
+    }
+
     if (a.inChaos && b.inChaos) {
       return compareLocations(a.location_id, b.location_id);
     }
-    if (a.inChaos) return -1;
-    if (b.inChaos) return 1;
-
-    if (a.status !== 'missing' && b.status === 'missing') return -1;
-    if (a.status === 'missing' && b.status !== 'missing') return 1;
 
     return a.card_name.localeCompare(b.card_name);
   });

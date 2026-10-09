@@ -616,7 +616,7 @@ export const SniperSearch: React.FC = () => {
                 }
               }}
               placeholder='Search card name or Scryfall syntax (e.g. cmc<=2, p<=5, id<=wu, otag:removal)...'
-              className="w-full bg-slate-900 border border-slate-700/80 rounded-2xl pl-12 pr-10 py-3.5 text-base text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-amber-500 shadow-lg font-sans"
+              className="w-full bg-slate-900 border border-slate-700/80 rounded-2xl pl-12 pr-10 py-3.5 text-base text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-theme-primary shadow-lg font-sans"
               autoFocus
             />
             {query && (
@@ -636,7 +636,7 @@ export const SniperSearch: React.FC = () => {
                 <button
                   key={idx}
                   onClick={() => { setQuery(name); setSuggestions([]); playSound('click'); }}
-                  className="w-full text-left px-4 py-2.5 text-sm text-slate-200 hover:bg-amber-500/10 hover:text-amber-400 flex items-center justify-between"
+                  className="w-full text-left px-4 py-2.5 text-sm text-slate-200 hover:bg-theme-subtle hover:text-theme-primary flex items-center justify-between"
                 >
                   <span>{name}</span>
                   <span className="text-xs text-slate-500 font-mono">Select</span>
@@ -665,7 +665,7 @@ export const SniperSearch: React.FC = () => {
             <button
               onClick={() => { setScope('inventory'); playSound('click'); }}
               className={`px-2.5 py-1 rounded-md transition ${
-                scope === 'inventory' ? 'bg-amber-500 text-slate-950 font-bold' : 'text-slate-400 hover:text-white'
+                scope === 'inventory' ? 'bg-theme-primary text-slate-950 font-bold' : 'text-slate-400 hover:text-white'
               }`}
             >
               My Cards
@@ -673,7 +673,7 @@ export const SniperSearch: React.FC = () => {
             <button
               onClick={() => { setScope('global'); playSound('click'); }}
               className={`px-2.5 py-1 rounded-md transition flex items-center gap-1 ${
-                scope === 'global' ? 'bg-amber-500 text-slate-950 font-bold' : 'text-slate-400 hover:text-white'
+                scope === 'global' ? 'bg-theme-primary text-slate-950 font-bold' : 'text-slate-400 hover:text-white'
               }`}
             >
               <Sparkles className="h-3 w-3" />
@@ -692,20 +692,20 @@ export const SniperSearch: React.FC = () => {
           </span>
           {query.trim() && (
             <span className="text-slate-500">
-              for &quot;<span className="text-amber-400">{query}</span>&quot;
+              for &quot;<span className="text-theme-accent">{query}</span>&quot;
             </span>
           )}
         </div>
 
         <div className="flex flex-wrap items-center gap-2 text-xs font-mono">
           <div className="flex items-center gap-1.5">
-            <ArrowUpDown className="h-3.5 w-3.5 text-amber-400" />
+            <ArrowUpDown className="h-3.5 w-3.5 text-theme-accent" />
             <span className="text-slate-400 font-bold">Sort:</span>
             <select
               value={primarySort}
               onChange={(e) => handlePrimarySortChange(e.target.value as SortOption)}
               aria-label="Primary Sort"
-              className="bg-slate-900 border border-slate-700 hover:border-slate-600 text-slate-200 text-xs rounded-xl px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-amber-500 font-sans cursor-pointer transition shadow"
+              className="bg-slate-900 border border-slate-700 hover:border-slate-600 text-slate-200 text-xs rounded-xl px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-theme-primary font-sans cursor-pointer transition shadow"
             >
               {SORT_OPTIONS.map(opt => (
                 <option key={`prim-${opt.value}`} value={opt.value}>
@@ -721,7 +721,7 @@ export const SniperSearch: React.FC = () => {
               value={secondarySort}
               onChange={(e) => handleSecondarySortChange(e.target.value as SortOption)}
               aria-label="Secondary Sort"
-              className="bg-slate-900 border border-slate-700 hover:border-slate-600 text-slate-300 text-xs rounded-xl px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-amber-500 font-sans cursor-pointer transition shadow"
+              className="bg-slate-900 border border-slate-700 hover:border-slate-600 text-slate-300 text-xs rounded-xl px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-theme-primary font-sans cursor-pointer transition shadow"
             >
               <option value="none">None</option>
               {SORT_OPTIONS.map(opt => (
@@ -819,8 +819,8 @@ export const SniperSearch: React.FC = () => {
                     }}
                     className={`h-6 w-6 rounded-full flex items-center justify-center transition shadow-lg cursor-pointer ${
                       cardMenuOpenId === card.oracle_id
-                        ? 'bg-amber-500 text-slate-950 font-black ring-2 ring-amber-300'
-                        : 'bg-slate-950/85 hover:bg-slate-900 text-white border border-slate-700/80 hover:border-amber-400'
+                        ? 'bg-theme-accent text-slate-950 font-black ring-2 ring-theme-accent/60'
+                        : 'bg-slate-950/85 hover:bg-slate-900 text-white border border-slate-700/80 hover:border-theme-accent'
                     }`}
                     title="Card options menu"
                   >
@@ -840,7 +840,7 @@ export const SniperSearch: React.FC = () => {
                             onClick={() => { setCardMenuOpenId(null); handleOpenQuickAdd(card, false); }}
                             className="w-full px-2 py-1.5 rounded-lg text-left flex items-center gap-1.5 hover:bg-slate-800 text-slate-200 cursor-pointer"
                           >
-                            <Plus className="h-3.5 w-3.5 text-amber-400" />
+                            <Plus className="h-3.5 w-3.5 text-theme-accent" />
                             <span>+ Add Real Copy</span>
                           </button>
                           <button
@@ -885,7 +885,7 @@ export const SniperSearch: React.FC = () => {
                           </div>
                           {cardInstances.map((inst, cIdx) => (
                             <div key={inst.instance_id} className="p-1.5 rounded bg-slate-950/60 border border-slate-800 space-y-1">
-                              <div className="text-[10px] text-amber-400 font-mono font-bold flex justify-between">
+                              <div className="text-[10px] text-theme-accent font-mono font-bold flex justify-between">
                                 <span>Copy #{cIdx + 1}</span>
                                 <span className="text-slate-400 truncate max-w-[90px]">{inst.location_id || (inst.state === 'B' ? 'Brewing' : 'Proxy Box')}</span>
                               </div>
@@ -925,7 +925,7 @@ export const SniperSearch: React.FC = () => {
                         className="w-full px-2 py-1.5 rounded-lg text-left flex items-center justify-between hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
                       >
                         <span className="flex items-center gap-1.5">
-                          <Bookmark className="h-3.5 w-3.5 text-amber-400" />
+                          <Bookmark className="h-3.5 w-3.5 text-theme-accent" />
                           <span>Add to List...</span>
                         </span>
                         <ChevronRight className={`h-3 w-3 text-slate-400 transition-transform ${listSubmenuOpenId === card.oracle_id ? 'rotate-90' : ''}`} />
@@ -947,7 +947,7 @@ export const SniperSearch: React.FC = () => {
                           <button
                             type="button"
                             onClick={() => handleQuickCreateListAndAdd(card.name, card)}
-                            className="w-full px-2 py-1 rounded text-left flex items-center gap-1 text-amber-400 hover:text-amber-300 hover:bg-slate-800 transition cursor-pointer text-[11px] font-semibold"
+                            className="w-full px-2 py-1 rounded text-left flex items-center gap-1 text-theme-accent hover:brightness-110 hover:bg-slate-800 transition cursor-pointer text-[11px] font-semibold"
                           >
                             <Plus className="h-3 w-3" />
                             <span>+ New List</span>
@@ -966,7 +966,7 @@ export const SniperSearch: React.FC = () => {
                     <h2 className="text-lg font-bold text-white flex items-center gap-2">
                       <span>{card.name}</span>
                       {card.mana_cost && (
-                        <span className="text-xs font-mono text-amber-300 bg-amber-950/40 px-2 py-0.5 rounded border border-amber-800/40">
+                        <span className="text-xs font-mono text-theme-accent bg-theme-accent-subtle px-2 py-0.5 rounded border border-theme-accent-subtle">
                           {card.mana_cost}
                         </span>
                       )}
@@ -981,7 +981,7 @@ export const SniperSearch: React.FC = () => {
                       onClick={() => handleOpenQuickAdd(card, false)}
                       className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-slate-300 hover:text-white flex items-center gap-1.5 border border-slate-700 transition cursor-pointer"
                     >
-                      <Plus className="h-3.5 w-3.5 text-amber-400" />
+                      <Plus className="h-3.5 w-3.5 text-theme-accent" />
                       <span>+ Add Copy</span>
                     </button>
                     <button
@@ -1055,7 +1055,7 @@ export const SniperSearch: React.FC = () => {
                             <div className="flex flex-wrap items-center gap-2">
                               {isInChaos ? (
                                 <div className="flex items-center gap-2">
-                                  <span className="px-2.5 py-1 rounded-lg bg-amber-500/20 text-amber-400 font-mono-coordinate font-black text-sm border border-amber-500/40 flex items-center gap-1">
+                                  <span className="px-2.5 py-1 rounded-lg bg-theme-accent-subtle text-theme-accent font-mono-coordinate font-black text-sm border border-theme-accent-subtle flex items-center gap-1">
                                     <MapPin className="h-3.5 w-3.5" />
                                     <span>{inst.location_id || 'UNASSIGNED'}</span>
                                   </span>
@@ -1195,7 +1195,7 @@ export const SniperSearch: React.FC = () => {
                                 <>
                                   <button
                                     onClick={() => handleOpenReturnModal(inst)}
-                                    className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold font-mono text-xs shadow flex items-center gap-1 cursor-pointer"
+                                    className="px-3 py-1.5 rounded-lg bg-theme-accent hover:bg-theme-accent-hover text-slate-950 font-bold font-mono text-xs shadow flex items-center gap-1 cursor-pointer"
                                     title="Return to Chaos Drawers"
                                   >
                                     <RotateCcw className="h-3 w-3" />
@@ -1222,7 +1222,7 @@ export const SniperSearch: React.FC = () => {
                                   }}
                                   className={`p-1.5 rounded-lg transition border cursor-pointer ${
                                     cardMenuOpenId === inst.instance_id
-                                      ? 'bg-amber-500 text-slate-950 border-amber-400'
+                                      ? 'bg-theme-accent text-slate-950 border-theme-accent'
                                       : 'text-slate-400 hover:text-white bg-slate-900 border-slate-700/80 hover:bg-slate-800'
                                   }`}
                                   title="Copy status settings"
@@ -1263,7 +1263,7 @@ export const SniperSearch: React.FC = () => {
                                       className="w-full px-2 py-1.5 rounded-lg text-left flex items-center justify-between hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
                                     >
                                       <span className="flex items-center gap-1.5">
-                                        <Bookmark className="h-3.5 w-3.5 text-amber-400" />
+                                        <Bookmark className="h-3.5 w-3.5 text-theme-accent" />
                                         <span>Add to List...</span>
                                       </span>
                                       <ChevronRight className={`h-3 w-3 text-slate-400 transition-transform ${listSubmenuOpenId === inst.instance_id ? 'rotate-90' : ''}`} />
@@ -1285,7 +1285,7 @@ export const SniperSearch: React.FC = () => {
                                         <button
                                           type="button"
                                           onClick={() => handleQuickCreateListAndAdd(inst.card_name)}
-                                          className="w-full px-2 py-1 rounded text-left flex items-center gap-1 text-amber-400 hover:text-amber-300 hover:bg-slate-800 transition cursor-pointer text-[11px] font-semibold"
+                                          className="w-full px-2 py-1 rounded text-left flex items-center gap-1 text-theme-accent hover:text-theme-accent-hover hover:bg-slate-800 transition cursor-pointer text-[11px] font-semibold"
                                         >
                                           <Plus className="h-3 w-3" />
                                           <span>+ New List</span>
@@ -1313,7 +1313,7 @@ export const SniperSearch: React.FC = () => {
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-sm w-full p-5 space-y-4 shadow-2xl">
             <h3 className="text-base font-bold text-white flex items-center gap-2">
-              <RotateCcw className="h-4 w-4 text-amber-400" />
+              <RotateCcw className="h-4 w-4 text-theme-accent" />
               Return {returningInstance.card_name} to Drawers
             </h3>
 
@@ -1376,7 +1376,7 @@ export const SniperSearch: React.FC = () => {
               </button>
               <button
                 onClick={handleConfirmReturn}
-                className="px-3 py-1.5 rounded-lg bg-amber-500 font-bold text-slate-950"
+                className="px-3 py-1.5 rounded-lg bg-theme-accent hover:bg-theme-accent-hover font-bold text-slate-950 cursor-pointer shadow"
               >
                 Confirm Return
               </button>
@@ -1390,7 +1390,7 @@ export const SniperSearch: React.FC = () => {
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-sm w-full p-5 space-y-4 shadow-2xl">
             <h3 className="text-base font-bold text-white flex items-center gap-2">
-              <MapPin className="h-4 w-4 text-amber-400" />
+              <MapPin className="h-4 w-4 text-theme-accent" />
               Edit Drawer Coordinate
             </h3>
 
@@ -1453,7 +1453,7 @@ export const SniperSearch: React.FC = () => {
               </button>
               <button
                 onClick={handleSaveEdit}
-                className="px-3 py-1.5 rounded-lg bg-amber-500 font-bold text-slate-950"
+                className="px-3 py-1.5 rounded-lg bg-theme-accent hover:bg-theme-accent-hover font-bold text-slate-950 cursor-pointer shadow"
               >
                 Save
               </button>
@@ -1465,7 +1465,7 @@ export const SniperSearch: React.FC = () => {
       {/* Toast Notification */}
       {toastMessage && (
         <div className="fixed bottom-6 right-6 z-50 bg-slate-900/95 border border-slate-700 text-slate-100 px-4 py-3 rounded-xl shadow-2xl flex items-center gap-2 text-xs font-mono backdrop-blur animate-in fade-in slide-in-from-bottom-2">
-          <Sparkles className="h-4 w-4 text-amber-400 shrink-0" />
+          <Sparkles className="h-4 w-4 text-theme-accent shrink-0" />
           <span>{toastMessage}</span>
           {toastUndoAction && (
             <button
@@ -1474,7 +1474,7 @@ export const SniperSearch: React.FC = () => {
                 setToastMessage(null);
                 setToastUndoAction(null);
               }}
-              className="ml-2 px-2.5 py-1 rounded bg-amber-500/20 text-amber-300 hover:bg-amber-500/30 font-bold border border-amber-500/40 cursor-pointer flex items-center gap-1 shadow"
+              className="ml-2 px-2.5 py-1 rounded bg-theme-accent-subtle text-theme-accent hover:bg-theme-accent/30 font-bold border border-theme-accent-subtle cursor-pointer flex items-center gap-1 shadow"
             >
               <RotateCcw className="h-3 w-3" />
               <span>Undo ↺</span>
@@ -1494,7 +1494,7 @@ export const SniperSearch: React.FC = () => {
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-sm w-full p-5 space-y-4 shadow-2xl">
             <h3 className="text-base font-bold text-white flex items-center gap-2">
-              <Plus className="h-4 w-4 text-amber-400" />
+              <Plus className="h-4 w-4 text-theme-accent" />
               <span>Add Physical Copy of {quickAddCard.name}</span>
             </h3>
 
@@ -1587,7 +1587,7 @@ export const SniperSearch: React.FC = () => {
                 className={`px-3 py-1.5 rounded-lg font-bold cursor-pointer shadow ${
                   addAsProxy
                     ? 'bg-purple-600 hover:bg-purple-500 text-white'
-                    : 'bg-amber-500 hover:bg-amber-400 text-slate-950'
+                    : 'bg-theme-accent hover:bg-theme-accent-hover text-slate-950'
                 }`}
               >
                 {addAsProxy ? 'Index as Proxy' : 'Index Copy'}

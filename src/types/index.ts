@@ -46,6 +46,8 @@ export interface PickItem {
   batch_index?: number;
   status: 'pending' | 'pulled_brew' | 'pulled_trade' | 'skipped' | 'missing';
   inChaos: boolean;
+  is_proxy?: boolean;
+  category?: 'units' | 'decks' | 'proxies' | 'missing';
   card_metadata?: ScryfallCard;
   original_instance?: CardInstance;
 }

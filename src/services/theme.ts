@@ -27,8 +27,8 @@ export const GUILD_THEMES: GuildTheme[] = [
     colors: 'White / Black',
     guild: 'W/B',
     primaryHex: '#ffffff',
-    accentHex: '#09090b',
-    description: 'Syndicate stark marble white & obsidian jet black'
+    accentHex: '#f59e0b',
+    description: 'Syndicate stark marble white & gilded coin gold'
   },
   {
     id: 'azorius',
@@ -36,7 +36,7 @@ export const GUILD_THEMES: GuildTheme[] = [
     colors: 'White / Blue',
     guild: 'W/U',
     primaryHex: '#38bdf8',
-    accentHex: '#ffffff',
+    accentHex: '#f8fafc',
     description: 'Senate azure blue & alabaster silver'
   },
   {
@@ -45,8 +45,8 @@ export const GUILD_THEMES: GuildTheme[] = [
     colors: 'Blue / Black',
     guild: 'U/B',
     primaryHex: '#06b6d4',
-    accentHex: '#09090b',
-    description: 'Shadow cobalt cyan & stealth obsidian black'
+    accentHex: '#818cf8',
+    description: 'Shadow cobalt cyan & stealth violet indigo'
   },
   {
     id: 'rakdos',
@@ -54,8 +54,8 @@ export const GUILD_THEMES: GuildTheme[] = [
     colors: 'Black / Red',
     guild: 'B/R',
     primaryHex: '#ef4444',
-    accentHex: '#09090b',
-    description: 'Carnival flame red & midnight jet black'
+    accentHex: '#f97316',
+    description: 'Carnival flame red & bonfire orange'
   },
   {
     id: 'gruul',
@@ -72,8 +72,8 @@ export const GUILD_THEMES: GuildTheme[] = [
     colors: 'Green / White',
     guild: 'G/W',
     primaryHex: '#10b981',
-    accentHex: '#ffffff',
-    description: 'Verdant canopy emerald & sunlit dawn white'
+    accentHex: '#fef08a',
+    description: 'Verdant canopy emerald & sunlit dawn ivory'
   },
   {
     id: 'izzet',
@@ -90,8 +90,8 @@ export const GUILD_THEMES: GuildTheme[] = [
     colors: 'Black / Green',
     guild: 'B/G',
     primaryHex: '#22c55e',
-    accentHex: '#09090b',
-    description: 'Under-city rot green & deep shadow black'
+    accentHex: '#eab308',
+    description: 'Under-city rot green & necrotic spore amber'
   },
   {
     id: 'boros',
@@ -99,7 +99,7 @@ export const GUILD_THEMES: GuildTheme[] = [
     colors: 'Red / White',
     guild: 'R/W',
     primaryHex: '#ef4444',
-    accentHex: '#ffffff',
+    accentHex: '#f8fafc',
     description: 'Legion flame red & sunburst ivory white'
   },
   {
