@@ -10,6 +10,7 @@ import { db } from './services/db';
 import { syncClient } from './services/sync';
 import { InventoryStats } from './types';
 import { applyTheme, getActiveTheme } from './services/theme';
+import { enrichMissingCards } from './services/scryfall';
 
 export function App() {
   const [activeTab, setActiveTab] = useState<'search' | 'pickpath' | 'cabinet' | 'ingest' | 'lists'>('search');
@@ -40,6 +41,11 @@ export function App() {
 
   useEffect(() => {
     applyTheme(getActiveTheme());
+    // Smooth idle background resolution without triggering any active UI loading bar
+    const timer = setTimeout(() => {
+      enrichMissingCards(false, true);
+    }, 2000);
+    return () => clearTimeout(timer);
   }, []);
 
   useEffect(() => {

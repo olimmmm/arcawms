@@ -163,7 +163,7 @@ function sleep(ms: number) {
 /**
  * Helper to execute a Scryfall request with browser direct fetch and backend proxy fallback
  */
-async function fetchScryfallJson(url: string): Promise<any | null> {
+async function fetchScryfallJson(url: string, retryCount = 0): Promise<any | null> {
   try {
     const headers: Record<string, string> = {
       'Accept': 'application/json'
@@ -172,6 +172,14 @@ async function fetchScryfallJson(url: string): Promise<any | null> {
       headers['User-Agent'] = 'ArcaWMS/1.1 (MTG Chaos-Sorting WMS)';
     }
     const res = await fetch(url, { headers });
+    if (res.status === 429) {
+      if (retryCount < 3) {
+        console.warn(`[Scryfall API] 429 Rate limit hit on ${url}. Backing off... (attempt ${retryCount + 1})`);
+        await sleep(1500 * (retryCount + 1));
+        return fetchScryfallJson(url, retryCount + 1);
+      }
+      return null;
+    }
     if (res.ok) {
       return await res.json();
     }
@@ -187,6 +195,13 @@ async function fetchScryfallJson(url: string): Promise<any | null> {
       const proxyRes = await fetch(proxyUrl, {
         headers: { 'Accept': 'application/json' }
       });
+      if (proxyRes.status === 429) {
+        if (retryCount < 3) {
+          await sleep(1500 * (retryCount + 1));
+          return fetchScryfallJson(url, retryCount + 1);
+        }
+        return null;
+      }
       if (proxyRes.ok) {
         return await proxyRes.json();
       }
@@ -429,7 +444,7 @@ export async function fetchScryfallCardsBatch(
 
   onProgress?.(0, toFetch.length);
 
-  const CONCURRENCY = 3;
+  const CONCURRENCY = 2;
   let queueIndex = 0;
   let completedCount = 0;
   const cardsToUpsert: ScryfallCard[] = [];
@@ -450,12 +465,12 @@ export async function fetchScryfallCardsBatch(
       completedCount++;
       onProgress?.(completedCount, toFetch.length, name);
 
-      if (cardsToUpsert.length >= 15) {
+      if (cardsToUpsert.length >= 10) {
         const batch = cardsToUpsert.splice(0, cardsToUpsert.length);
         db.upsertCardsBatch(batch);
       }
 
-      await sleep(75);
+      await sleep(100);
     }
   }
 
@@ -474,12 +489,12 @@ export async function fetchScryfallCardsBatch(
 /**
  * Background Card Metadata & Price Auto-Enricher
  * Scans the database for cards with missing CDN images, €0.00 prices, or un-resolved promo outliers,
- * and fetches them in fast 75-card batches from Scryfall.
+ * and fetches them in fast batches from Scryfall.
  */
 let isEnriching = false;
 const alreadyCheckedEnrichNames = new Set<string>();
 
-export async function enrichMissingCards(force = false): Promise<number> {
+export async function enrichMissingCards(force = false, isSilent = false): Promise<number> {
   if (isEnriching) return 0;
   isEnriching = true;
 
@@ -494,8 +509,16 @@ export async function enrichMissingCards(force = false): Promise<number> {
     const cardMap = new Map<string, ScryfallCard>();
     allCards.forEach(c => {
       const existing = cardMap.get(c.name.toLowerCase());
-      if (!existing || existing.price_eur === 0 || (c.price_eur > 0 && c.price_eur < existing.price_eur)) {
+      if (!existing) {
         cardMap.set(c.name.toLowerCase(), c);
+      } else {
+        if (!existing.is_smart_resolved && c.is_smart_resolved) {
+          cardMap.set(c.name.toLowerCase(), c);
+        } else if (existing.price_eur === 0 && c.price_eur > 0) {
+          cardMap.set(c.name.toLowerCase(), c);
+        } else if (c.price_eur > 0 && c.price_eur < existing.price_eur) {
+          cardMap.set(c.name.toLowerCase(), c);
+        }
       }
       cardMap.set(c.oracle_id, c);
     });
@@ -527,31 +550,33 @@ export async function enrichMissingCards(force = false): Promise<number> {
       }
     }
 
-    // Mark as checked so we never loop on cards that have no EUR market price or are unresolvable
-    for (const name of namesToEnrich) {
-      alreadyCheckedEnrichNames.add(name.toLowerCase());
-    }
-
     if (namesToEnrich.size === 0) {
-      notifyEnrichProgress({ isActive: false, processed: 0, total: 0 });
+      if (!isSilent) notifyEnrichProgress({ isActive: false, processed: 0, total: 0 });
       return 0;
     }
 
     const namesList = Array.from(namesToEnrich);
-    notifyEnrichProgress({
-      isActive: true,
-      processed: 0,
-      total: namesList.length,
-      currentCard: 'Starting price resolution...'
-    });
-
-    const fetchedMap = await fetchScryfallCardsBatch(namesList, (processed, total, currentCard) => {
+    if (!isSilent) {
       notifyEnrichProgress({
         isActive: true,
-        processed,
-        total,
-        currentCard
+        processed: 0,
+        total: namesList.length,
+        currentCard: 'Starting price resolution...'
       });
+    }
+
+    const fetchedMap = await fetchScryfallCardsBatch(namesList, (processed, total, currentCard) => {
+      if (currentCard) {
+        alreadyCheckedEnrichNames.add(currentCard.toLowerCase());
+      }
+      if (!isSilent) {
+        notifyEnrichProgress({
+          isActive: true,
+          processed,
+          total,
+          currentCard
+        });
+      }
     });
 
     const cardsToUpsert = Array.from(fetchedMap.values());
@@ -559,12 +584,14 @@ export async function enrichMissingCards(force = false): Promise<number> {
       db.upsertCardsBatch(cardsToUpsert);
     }
 
-    notifyEnrichProgress({
-      isActive: true,
-      processed: namesList.length,
-      total: namesList.length,
-      currentCard: 'Completed'
-    });
+    if (!isSilent) {
+      notifyEnrichProgress({
+        isActive: true,
+        processed: namesList.length,
+        total: namesList.length,
+        currentCard: 'Completed'
+      });
+    }
 
     return cardsToUpsert.length;
   } catch (e) {
@@ -572,14 +599,16 @@ export async function enrichMissingCards(force = false): Promise<number> {
     return 0;
   } finally {
     isEnriching = false;
-    setTimeout(() => {
-      notifyEnrichProgress({
-        isActive: false,
-        processed: 0,
-        total: 0,
-        currentCard: undefined
-      });
-    }, 1500);
+    if (!isSilent) {
+      setTimeout(() => {
+        notifyEnrichProgress({
+          isActive: false,
+          processed: 0,
+          total: 0,
+          currentCard: undefined
+        });
+      }, 1500);
+    }
   }
 }
 

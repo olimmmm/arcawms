@@ -361,14 +361,25 @@ class ArcaDatabase {
     const existing = this.cardsByName.get(key);
     if (!existing) {
       this.cardsByName.set(key, card);
-    } else {
-      const existingHasPrice = existing.price_eur > 0;
-      const newHasPrice = card.price_eur > 0;
-      if (!existingHasPrice && newHasPrice) {
-        this.cardsByName.set(key, card);
-      } else if (existingHasPrice && newHasPrice && card.price_eur < existing.price_eur) {
-        this.cardsByName.set(key, card);
-      }
+      return;
+    }
+
+    // 1. Prioritize smart-resolved cards over un-resolved cards
+    if (!existing.is_smart_resolved && card.is_smart_resolved) {
+      this.cardsByName.set(key, card);
+      return;
+    }
+    if (existing.is_smart_resolved && !card.is_smart_resolved) {
+      return;
+    }
+
+    // 2. Prioritize cards with valid non-zero prices
+    const existingHasPrice = existing.price_eur > 0;
+    const newHasPrice = card.price_eur > 0;
+    if (!existingHasPrice && newHasPrice) {
+      this.cardsByName.set(key, card);
+    } else if (existingHasPrice && newHasPrice && card.price_eur < existing.price_eur) {
+      this.cardsByName.set(key, card);
     }
   }
 
@@ -815,8 +826,9 @@ class ArcaDatabase {
     const byId = this.cards.get(oracleIdOrName);
     if (byId) {
       const canonical = this.cardsByName.get(byId.name.trim().toLowerCase());
-      if (canonical && canonical.price_eur > 0 && canonical.price_eur < byId.price_eur) {
-        return canonical;
+      if (canonical) {
+        if (canonical.is_smart_resolved && !byId.is_smart_resolved) return canonical;
+        if (canonical.price_eur > 0 && canonical.price_eur < byId.price_eur) return canonical;
       }
       return byId;
     }
@@ -825,8 +837,9 @@ class ArcaDatabase {
     const byIdClean = this.cards.get(clean);
     if (byIdClean) {
       const canonical = this.cardsByName.get(byIdClean.name.trim().toLowerCase());
-      if (canonical && canonical.price_eur > 0 && canonical.price_eur < byIdClean.price_eur) {
-        return canonical;
+      if (canonical) {
+        if (canonical.is_smart_resolved && !byIdClean.is_smart_resolved) return canonical;
+        if (canonical.price_eur > 0 && canonical.price_eur < byIdClean.price_eur) return canonical;
       }
       return byIdClean;
     }
@@ -844,6 +857,9 @@ class ArcaDatabase {
       if (!card.image_url_normal || !card.image_url_normal.startsWith('https://cards.scryfall.io')) {
         card.image_url_normal = existing.image_url_normal;
       }
+    }
+    if (card.is_smart_resolved === undefined && existing?.is_smart_resolved) {
+      card.is_smart_resolved = true;
     }
 
     // 1. Remove duplicate card entries with same name
@@ -897,6 +913,9 @@ class ArcaDatabase {
           card.image_url_normal = existing.image_url_normal;
         }
       }
+      if (card.is_smart_resolved === undefined && existing?.is_smart_resolved) {
+        card.is_smart_resolved = true;
+      }
 
       // 1. Remove duplicate card entries with same name
       if (existing && existing.oracle_id !== card.oracle_id) {
@@ -947,8 +966,12 @@ class ArcaDatabase {
     let modified = false;
 
     for (const [name, cardList] of cardsByName.entries()) {
-      // Sort: best card first (has price > 0, has CDN image, lowest non-zero price)
+      // Sort: best card first (smart-resolved, has price > 0, has CDN image, lowest non-zero price)
       cardList.sort((a, b) => {
+        // 1. Prioritize smart-resolved cards
+        if (a.is_smart_resolved && !b.is_smart_resolved) return -1;
+        if (!a.is_smart_resolved && b.is_smart_resolved) return 1;
+
         const aPrice = a.price_eur || 0;
         const bPrice = b.price_eur || 0;
         if (aPrice > 0 && bPrice === 0) return -1;
