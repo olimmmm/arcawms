@@ -118,11 +118,19 @@ export function compareLocations(locA: string | null | undefined, locB: string |
   return a.batch_index - b.batch_index;
 }
 
+export interface ParsedDecklistLine {
+  name: string;
+  count: number;
+  set?: string;
+  collector_number?: string;
+}
+
 /**
  * Cleans a single line from a decklist or inventory export.
  * Strips foil tags, set codes, collector numbers (e.g. "3 Carrion Feeder (EMA) 84").
+ * Also extracts set and collector number if present.
  */
-export function cleanCardLine(rawLine: string): { name: string; count: number } | null {
+export function cleanCardLine(rawLine: string): ParsedDecklistLine | null {
   let line = rawLine.trim();
   if (!line || line.startsWith('//') || line.startsWith('#') || line.toLowerCase().startsWith('sideboard') || line.toLowerCase().startsWith('commander')) {
     return null;
@@ -134,11 +142,21 @@ export function cleanCardLine(rawLine: string): { name: string; count: number } 
              .replace(/\s*\[foil\]\s*/gi, ' ')
              .replace(/\s*\(foil\)\s*/gi, ' ');
 
-  // 2. Remove set code and collector number from common formats:
+  // 2. Extract set code and collector number if present
+  let set: string | undefined;
+  let collectorNumber: string | undefined;
+
+  const setMatch = line.match(/\s*[\(\[]([A-Za-z0-9_-]{2,6})[\)\]](?:\s*[:#]?\s*([0-9A-Za-z*#★_\/-]+))?/i);
+  if (setMatch) {
+    set = setMatch[1].toLowerCase();
+    if (setMatch[2]) collectorNumber = setMatch[2];
+  }
+
+  // 3. Remove set code and collector number from common formats:
   // e.g. " (EMA) 84", " [EMA] 84", " (EMA) #84", " (EMA) 84/249", " (EMA:84)"
   line = line.replace(/\s*[\(\[][A-Za-z0-9_-]{2,6}[\)\]]?\s*#?[0-9A-Za-z*#★_\/-]*.*$/g, '');
 
-  // 3. Extract quantity prefix (e.g. "3", "3x", "3X")
+  // 4. Extract quantity prefix (e.g. "3", "3x", "3X")
   const match = line.match(/^(\d+)[xX]?\s+(.+)$/);
   let count = 1;
   let cardName = line;
@@ -148,30 +166,35 @@ export function cleanCardLine(rawLine: string): { name: string; count: number } 
     cardName = match[2].trim();
   }
 
-  // 4. Clean extra spaces
+  // 5. Clean extra spaces
   cardName = cardName.trim().replace(/\s{2,}/g, ' ');
 
   if (!cardName) return null;
-  return { name: cardName, count: isNaN(count) || count < 1 ? 1 : count };
+  return {
+    name: cardName,
+    count: isNaN(count) || count < 1 ? 1 : count,
+    set,
+    collector_number: collectorNumber
+  };
 }
 
 /**
  * Parses pasted decklist or wants list while preserving encounter order
  */
-export function parseDecklistText(rawText: string): { name: string; count: number }[] {
+export function parseDecklistText(rawText: string): ParsedDecklistLine[] {
   const lines = rawText.split(/\r?\n/);
-  const items: { name: string; count: number }[] = [];
+  const items: ParsedDecklistLine[] = [];
 
   for (const rawLine of lines) {
     const cleaned = cleanCardLine(rawLine);
     if (!cleaned) continue;
 
-    const key = cleaned.name.toLowerCase();
-    const existingIndex = items.findIndex(i => i.name.toLowerCase() === key);
+    const key = `${cleaned.name.toLowerCase()}|${cleaned.set || ''}`;
+    const existingIndex = items.findIndex(i => `${i.name.toLowerCase()}|${i.set || ''}` === key);
     if (existingIndex >= 0) {
       items[existingIndex].count += cleaned.count;
     } else {
-      items.push({ name: cleaned.name, count: cleaned.count });
+      items.push({ ...cleaned });
     }
   }
 

@@ -123,6 +123,24 @@ app.post('/api/scryfall/collection', async (req, res) => {
   }
 });
 
+// Proxy for Scryfall /cards/search (bypasses browser CORS and ad-blockers)
+app.get('/api/scryfall/search', async (req, res) => {
+  try {
+    const queryParams = new URLSearchParams(req.query as any).toString();
+    const response = await fetch(`https://api.scryfall.com/cards/search?${queryParams}`, {
+      headers: {
+        'User-Agent': 'ArcaWMS/1.1 (MTG Chaos-Sorting WMS)',
+        'Accept': 'application/json'
+      }
+    });
+    const data = await response.json();
+    res.status(response.status).json(data);
+  } catch (err: any) {
+    console.warn('Scryfall search proxy error:', err);
+    res.status(500).json({ error: err.message || 'Scryfall proxy error' });
+  }
+});
+
 // Serve frontend in production if built
 if (fs.existsSync(DIST_DIR)) {
   app.use(express.static(DIST_DIR));

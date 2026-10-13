@@ -123,25 +123,26 @@ export const IngestEngine: React.FC = () => {
       }
     }
 
-    // Pre-fetch missing cards in fast, rate-limit-free batches (75 cards per API call)
-    const cardNamesToFetch = parsed
-      .map(p => p.name)
-      .filter(name => {
-        const c = db.getCard(name);
+    // Pre-fetch missing cards in fast, rate-limit-free batches with smart lowest price resolution
+    const cardsToFetch = parsed
+      .filter(item => {
+        const c = db.getCard(item.name);
         return !c || !c.image_url_normal || !c.image_url_normal.startsWith('https://cards.scryfall.io') || !c.price_eur;
-      });
+      })
+      .map(item => ({ name: item.name, set: item.set }));
 
-    if (cardNamesToFetch.length > 0) {
-      const fetchedBatch = await fetchScryfallCardsBatch(cardNamesToFetch);
-      for (const card of fetchedBatch.values()) {
-        db.upsertCard(card);
-      }
+    if (cardsToFetch.length > 0) {
+      await fetchScryfallCardsBatch(cardsToFetch);
     }
+
+    const instancesToCreate: Omit<CardInstance, 'instance_id'>[] = [];
+    const returnsToChaos: { instanceId: string; locationId: string }[] = [];
+    const missingCardsToUpsert: ScryfallCard[] = [];
 
     for (const item of parsed) {
       let meta = db.getCard(item.name);
       if (!meta) {
-        meta = (await fetchScryfallCardByName(item.name)) || {
+        meta = (await fetchScryfallCardByName(item.name, item.set)) || {
           oracle_id: generateUUID(),
           name: item.name,
           cmc: 0,
@@ -152,14 +153,14 @@ export const IngestEngine: React.FC = () => {
           image_url_normal: getScryfallImageFallback(item.name),
           price_eur: 0
         };
-        db.upsertCard(meta);
+        missingCardsToUpsert.push(meta);
       }
 
       if (importAsProxies) {
         // Enforce Proxy Rule: Storage Units CANNOT contain proxies!
         if (mode === 'new_to_brewing') {
           for (let i = 0; i < item.count; i++) {
-            db.createInstance({
+            instancesToCreate.push({
               oracle_id: meta.oracle_id,
               card_name: meta.name,
               state: 'B',
@@ -171,7 +172,7 @@ export const IngestEngine: React.FC = () => {
         } else {
           // Ingest directly into offline Proxy Box (standard storage units prevented)
           for (let i = 0; i < item.count; i++) {
-            db.createInstance({
+            instancesToCreate.push({
               oracle_id: meta.oracle_id,
               card_name: meta.name,
               state: 'P',
@@ -184,7 +185,7 @@ export const IngestEngine: React.FC = () => {
       } else if (mode === 'new_to_chaos') {
         // Mode 1: New -> Chaos Drawers
         for (let i = 0; i < item.count; i++) {
-          db.createInstance({
+          instancesToCreate.push({
             oracle_id: meta.oracle_id,
             card_name: meta.name,
             state: 'A',
@@ -195,7 +196,7 @@ export const IngestEngine: React.FC = () => {
       } else if (mode === 'new_to_brewing') {
         // Mode 2: New -> Active Brewing / Decks Pool
         for (let i = 0; i < item.count; i++) {
-          db.createInstance({
+          instancesToCreate.push({
             oracle_id: meta.oracle_id,
             card_name: meta.name,
             state: 'B',
@@ -211,14 +212,17 @@ export const IngestEngine: React.FC = () => {
         let needed = item.count;
         while (needed > 0 && availableInBrew.length > 0) {
           const instToReturn = availableInBrew.shift()!;
-          db.returnToChaos(instToReturn.instance_id, currentCoordinate);
+          returnsToChaos.push({
+            instanceId: instToReturn.instance_id,
+            locationId: currentCoordinate
+          });
           returnedFromBrewing++;
           needed--;
         }
 
         // If user imported more copies than were digitally in brewing, index remaining into batch
         while (needed > 0) {
-          db.createInstance({
+          instancesToCreate.push({
             oracle_id: meta.oracle_id,
             card_name: meta.name,
             state: 'A',
@@ -230,6 +234,16 @@ export const IngestEngine: React.FC = () => {
       }
 
       totalProcessed += item.count;
+    }
+
+    if (missingCardsToUpsert.length > 0) {
+      db.upsertCardsBatch(missingCardsToUpsert);
+    }
+    if (returnsToChaos.length > 0) {
+      db.returnToChaosBatch(returnsToChaos);
+    }
+    if (instancesToCreate.length > 0) {
+      db.createInstancesBatch(instancesToCreate);
     }
 
     db.healAndDeduplicateCards();

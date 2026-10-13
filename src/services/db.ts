@@ -344,6 +344,8 @@ export const SEED_CUSTOM_LISTS: CustomList[] = [
 class ArcaDatabase {
   private instances: Map<string, CardInstance> = new Map();
   private cards: Map<string, ScryfallCard> = new Map();
+  private cardsByName: Map<string, ScryfallCard> = new Map();
+  private instancesByName: Map<string, Set<string>> = new Map();
   private customLists: Map<string, CustomList> = new Map();
   private history: ActivityLogItem[] = [];
   private listeners: Set<() => void> = new Set();
@@ -352,6 +354,54 @@ class ArcaDatabase {
 
   constructor() {
     this.init();
+  }
+
+  private updateCardNameIndex(card: ScryfallCard) {
+    const key = card.name.trim().toLowerCase();
+    const existing = this.cardsByName.get(key);
+    if (!existing) {
+      this.cardsByName.set(key, card);
+    } else {
+      const existingHasPrice = existing.price_eur > 0;
+      const newHasPrice = card.price_eur > 0;
+      if (!existingHasPrice && newHasPrice) {
+        this.cardsByName.set(key, card);
+      } else if (existingHasPrice && newHasPrice && card.price_eur < existing.price_eur) {
+        this.cardsByName.set(key, card);
+      }
+    }
+  }
+
+  private addInstanceToNameIndex(inst: CardInstance) {
+    const key = inst.card_name.trim().toLowerCase();
+    let set = this.instancesByName.get(key);
+    if (!set) {
+      set = new Set<string>();
+      this.instancesByName.set(key, set);
+    }
+    set.add(inst.instance_id);
+  }
+
+  private removeInstanceFromNameIndex(inst: CardInstance) {
+    const key = inst.card_name.trim().toLowerCase();
+    const set = this.instancesByName.get(key);
+    if (set) {
+      set.delete(inst.instance_id);
+      if (set.size === 0) {
+        this.instancesByName.delete(key);
+      }
+    }
+  }
+
+  public rebuildIndexes() {
+    this.cardsByName.clear();
+    for (const card of this.cards.values()) {
+      this.updateCardNameIndex(card);
+    }
+    this.instancesByName.clear();
+    for (const inst of this.instances.values()) {
+      this.addInstanceToNameIndex(inst);
+    }
   }
 
   private init() {
@@ -435,6 +485,7 @@ class ArcaDatabase {
       SEED_CUSTOM_LISTS.forEach(l => this.customLists.set(l.id, { ...l, items: [...l.items] }));
     }
 
+    this.rebuildIndexes();
     this.healAndDeduplicateCards();
 
     // Sanitize proxy invariants:
@@ -638,28 +689,32 @@ class ArcaDatabase {
     const list = this.customLists.get(listId);
     if (!list || !itemsToAdd || itemsToAdd.length === 0) return 0;
 
+    const cardsToUpsert: ScryfallCard[] = [];
+    const itemMap = new Map<string, CustomListItem>();
+    for (const item of list.items) {
+      itemMap.set(item.card_name.trim().toLowerCase(), item);
+    }
+
     let addedCount = 0;
     for (const item of itemsToAdd) {
       const cleanName = item.name.trim();
       if (!cleanName) continue;
 
       if (item.metadata) {
-        this.upsertCard(item.metadata);
+        cardsToUpsert.push(item.metadata);
       }
       const resolvedMeta = item.metadata || this.getCard(cleanName);
+      const lower = cleanName.toLowerCase();
+      const existing = itemMap.get(lower);
 
-      const existingIdx = list.items.findIndex(
-        i => i.card_name.trim().toLowerCase() === cleanName.toLowerCase()
-      );
-
-      if (existingIdx >= 0) {
-        list.items[existingIdx].count += item.count;
-        if (item.notes) list.items[existingIdx].notes = item.notes;
-        if (resolvedMeta && !list.items[existingIdx].oracle_id) {
-          list.items[existingIdx].oracle_id = resolvedMeta.oracle_id;
+      if (existing) {
+        existing.count += item.count;
+        if (item.notes) existing.notes = item.notes;
+        if (resolvedMeta && !existing.oracle_id) {
+          existing.oracle_id = resolvedMeta.oracle_id;
         }
       } else {
-        list.items.push({
+        const newItem: CustomListItem = {
           id: generateUUID(),
           card_name: resolvedMeta ? resolvedMeta.name : cleanName,
           oracle_id: resolvedMeta?.oracle_id,
@@ -667,9 +722,15 @@ class ArcaDatabase {
           notes: item.notes || '',
           added_at: new Date().toISOString(),
           card_metadata: resolvedMeta
-        });
+        };
+        list.items.push(newItem);
+        itemMap.set(lower, newItem);
       }
       addedCount += item.count;
+    }
+
+    if (cardsToUpsert.length > 0) {
+      this.upsertCardsBatch(cardsToUpsert);
     }
 
     list.updated_at = new Date().toISOString();
@@ -746,38 +807,26 @@ class ArcaDatabase {
     if (!oracleIdOrName) return undefined;
     const clean = oracleIdOrName.trim().toLowerCase();
 
-    // 1. Direct oracle_id match if it already has a valid market price
-    if (this.cards.has(oracleIdOrName)) {
-      const byId = this.cards.get(oracleIdOrName);
-      if (byId && byId.price_eur > 0) return byId;
-    }
+    // 1. O(1) Fast lookup by card name
+    const byName = this.cardsByName.get(clean);
+    if (byName) return byName;
 
-    // 2. Name-based search: find canonical card with real market price
-    let bestByName: ScryfallCard | undefined;
-    for (const card of this.cards.values()) {
-      if (card.name.trim().toLowerCase() === clean) {
-        if (card.price_eur > 0) return card;
-        if (!bestByName) bestByName = card;
-      }
-    }
+    // 2. O(1) Fast lookup by oracle_id
+    const byId = this.cards.get(oracleIdOrName);
+    if (byId) return byId;
 
-    // 3. Search across all cards if oracle_id matches with price
-    for (const card of this.cards.values()) {
-      if (card.oracle_id === oracleIdOrName) {
-        if (card.price_eur > 0) return card;
-        if (!bestByName) bestByName = card;
-      }
-    }
+    // 3. Fallback: oracle_id might match lowercase clean
+    const byIdClean = this.cards.get(clean);
+    if (byIdClean) return byIdClean;
 
-    if (bestByName) return bestByName;
-    return this.cards.get(oracleIdOrName);
+    return undefined;
   }
 
   public upsertCard(card: ScryfallCard) {
     const cleanName = card.name.trim().toLowerCase();
 
     // Preserve existing price if incoming card has price 0 but existing had valid price
-    const existing = this.getCard(cleanName);
+    const existing = this.cardsByName.get(cleanName) || this.cards.get(card.oracle_id);
     if (existing && existing.price_eur > 0 && (!card.price_eur || card.price_eur === 0)) {
       card.price_eur = existing.price_eur;
       if (!card.image_url_normal || !card.image_url_normal.startsWith('https://cards.scryfall.io')) {
@@ -785,22 +834,23 @@ class ArcaDatabase {
       }
     }
 
-    // 1. Remove any dummy/stale duplicate card entries with the same name
-    for (const [id, c] of this.cards.entries()) {
-      if (c.name.trim().toLowerCase() === cleanName && id !== card.oracle_id) {
-        this.cards.delete(id);
-      }
+    // 1. Remove duplicate card entries with same name
+    if (existing && existing.oracle_id !== card.oracle_id) {
+      this.cards.delete(existing.oracle_id);
     }
 
     // 2. Store canonical card
     this.cards.set(card.oracle_id, card);
+    this.cardsByName.set(cleanName, card);
     this.saveCards();
 
-    // 3. Heal any instances whose card_name matches so they point to the canonical oracle_id
+    // 3. Heal only instances that match this card_name using the instancesByName index
     let instancesHealed = false;
-    for (const [instId, inst] of this.instances.entries()) {
-      if (inst.card_name.trim().toLowerCase() === cleanName) {
-        if (inst.oracle_id !== card.oracle_id || inst.card_name !== card.name) {
+    const matchingInstanceIds = this.instancesByName.get(cleanName);
+    if (matchingInstanceIds) {
+      for (const instId of matchingInstanceIds) {
+        const inst = this.instances.get(instId);
+        if (inst && (inst.oracle_id !== card.oracle_id || inst.card_name !== card.name)) {
           this.instances.set(instId, {
             ...inst,
             card_name: card.name,
@@ -828,7 +878,7 @@ class ArcaDatabase {
       const cleanName = card.name.trim().toLowerCase();
 
       // Preserve existing price if incoming card has price 0 but existing had valid price
-      const existing = this.getCard(cleanName);
+      const existing = this.cardsByName.get(cleanName) || this.cards.get(card.oracle_id);
       if (existing && existing.price_eur > 0 && (!card.price_eur || card.price_eur === 0)) {
         card.price_eur = existing.price_eur;
         if (!card.image_url_normal || !card.image_url_normal.startsWith('https://cards.scryfall.io')) {
@@ -837,19 +887,20 @@ class ArcaDatabase {
       }
 
       // 1. Remove duplicate card entries with same name
-      for (const [id, c] of this.cards.entries()) {
-        if (c.name.trim().toLowerCase() === cleanName && id !== card.oracle_id) {
-          this.cards.delete(id);
-        }
+      if (existing && existing.oracle_id !== card.oracle_id) {
+        this.cards.delete(existing.oracle_id);
       }
 
       // 2. Store canonical card
       this.cards.set(card.oracle_id, card);
+      this.cardsByName.set(cleanName, card);
 
-      // 3. Heal any instances whose card_name matches
-      for (const [instId, inst] of this.instances.entries()) {
-        if (inst.card_name.trim().toLowerCase() === cleanName) {
-          if (inst.oracle_id !== card.oracle_id || inst.card_name !== card.name) {
+      // 3. Heal any instances whose card_name matches using instancesByName
+      const matchingInstanceIds = this.instancesByName.get(cleanName);
+      if (matchingInstanceIds) {
+        for (const instId of matchingInstanceIds) {
+          const inst = this.instances.get(instId);
+          if (inst && (inst.oracle_id !== card.oracle_id || inst.card_name !== card.name)) {
             this.instances.set(instId, {
               ...inst,
               card_name: card.name,
@@ -884,7 +935,7 @@ class ArcaDatabase {
     let modified = false;
 
     for (const [name, cardList] of cardsByName.entries()) {
-      // Sort: best card first (has price > 0, has CDN image)
+      // Sort: best card first (has price > 0, has CDN image, lowest non-zero price)
       cardList.sort((a, b) => {
         const aPrice = a.price_eur || 0;
         const bPrice = b.price_eur || 0;
@@ -893,10 +944,11 @@ class ArcaDatabase {
         const aCdn = a.image_url_normal?.startsWith('https://cards.scryfall.io') ? 1 : 0;
         const bCdn = b.image_url_normal?.startsWith('https://cards.scryfall.io') ? 1 : 0;
         if (aCdn !== bCdn) return bCdn - aCdn;
-        return bPrice - aPrice;
+        return aPrice - bPrice;
       });
 
       const canonical = cardList[0];
+      this.cardsByName.set(name, canonical);
 
       // Remove stale/dummy duplicate cards
       if (cardList.length > 1) {
@@ -905,18 +957,18 @@ class ArcaDatabase {
           modified = true;
         }
       }
+    }
 
-      // Link all instances of this card name to the canonical oracle_id
-      for (const [instId, inst] of this.instances.entries()) {
-        if (inst.card_name.trim().toLowerCase() === name) {
-          if (inst.oracle_id !== canonical.oracle_id) {
-            this.instances.set(instId, {
-              ...inst,
-              oracle_id: canonical.oracle_id
-            });
-            modified = true;
-          }
-        }
+    // Link all instances of this card name to the canonical oracle_id in a single O(N) pass
+    for (const [instId, inst] of this.instances.entries()) {
+      const canonical = this.cardsByName.get(inst.card_name.trim().toLowerCase());
+      if (canonical && (inst.oracle_id !== canonical.oracle_id || inst.card_name !== canonical.name)) {
+        this.instances.set(instId, {
+          ...inst,
+          card_name: canonical.name,
+          oracle_id: canonical.oracle_id
+        });
+        modified = true;
       }
     }
 
@@ -960,6 +1012,7 @@ class ArcaDatabase {
       updated_at: new Date().toISOString()
     };
     this.instances.set(newInst.instance_id, newInst);
+    this.addInstanceToNameIndex(newInst);
     this.saveInstances();
     this.touchUpdated();
 
@@ -977,6 +1030,77 @@ class ArcaDatabase {
 
     this.notify();
     return newInst;
+  }
+
+  /**
+   * Batch creates multiple card instances, performing a single disk write and single notification
+   */
+  public createInstancesBatch(instancesToAdd: Omit<CardInstance, 'instance_id'>[]): CardInstance[] {
+    if (!instancesToAdd || instancesToAdd.length === 0) return [];
+
+    const now = new Date().toISOString();
+    const created: CardInstance[] = [];
+    const logGroups = new Map<string, { card_name: string; count: number; to_location: string; is_proxy: boolean; sample: CardInstance }>();
+
+    for (const instance of instancesToAdd) {
+      if (instance.is_proxy && instance.state === 'A') {
+        throw new Error('Storage Units CANNOT contain proxies. Proxies must be stored in Proxy Box or Decks/Brewing.');
+      }
+
+      const isProxy = !!instance.is_proxy;
+      const isForSale = !!instance.is_for_sale;
+      let state = instance.state;
+      if (!state) {
+        state = isProxy ? 'P' : 'A';
+      }
+      const locationId = state === 'P' ? 'Proxy Box' : (state === 'B' ? null : (instance.location_id || '1.A.01'));
+
+      const newInst: CardInstance = {
+        ...instance,
+        state,
+        location_id: locationId,
+        is_proxy: isProxy,
+        is_for_sale: isForSale,
+        instance_id: generateUUID(),
+        created_at: now,
+        updated_at: now
+      };
+
+      this.instances.set(newInst.instance_id, newInst);
+      this.addInstanceToNameIndex(newInst);
+      created.push(newInst);
+
+      const locLabel = newInst.location_id || (newInst.state === 'B' ? 'Brewing/Decks' : (newInst.state === 'P' ? 'Proxy Box' : 'Storage'));
+      const groupKey = `${newInst.card_name}|${locLabel}|${isProxy ? '1' : '0'}`;
+      if (!logGroups.has(groupKey)) {
+        logGroups.set(groupKey, {
+          card_name: newInst.card_name,
+          count: 0,
+          to_location: locLabel,
+          is_proxy: isProxy,
+          sample: newInst
+        });
+      }
+      logGroups.get(groupKey)!.count += 1;
+    }
+
+    this.saveInstances();
+    this.touchUpdated();
+
+    for (const group of logGroups.values()) {
+      this.logActivity({
+        type: 'added',
+        card_name: group.card_name,
+        count: group.count,
+        to_location: group.to_location,
+        details: group.is_proxy ? `Added ${group.count}x proxy into ${group.to_location}` : `Added ${group.count}x into ${group.to_location}`,
+        instance_id: group.sample.instance_id,
+        instance_snapshot: { ...group.sample }
+      });
+    }
+
+    this.notify();
+    return created;
   }
 
   /**
@@ -1040,6 +1164,67 @@ class ArcaDatabase {
         instance_id: instanceId,
         instance_snapshot: { ...existing }
       });
+
+      this.notify();
+    }
+  }
+
+  /**
+   * Batch returns multiple cards from Decks back into Chaos Drawers.
+   * Storage Units CANNOT contain proxies.
+   */
+  public returnToChaosBatch(updates: { instanceId: string; locationId: string }[]): void {
+    if (!updates || updates.length === 0) return;
+
+    const now = new Date().toISOString();
+    let modified = false;
+    const logGroups = new Map<string, { card_name: string; count: number; to_location: string; sample: CardInstance }>();
+
+    for (const update of updates) {
+      const existing = this.instances.get(update.instanceId);
+      if (!existing) continue;
+
+      if (existing.is_proxy) {
+        throw new Error('Storage Units CANNOT contain proxies. Proxies must be stored in Proxy Box.');
+      }
+
+      const updatedInst: CardInstance = {
+        ...existing,
+        state: 'A',
+        location_id: update.locationId,
+        updated_at: now
+      };
+      this.instances.set(update.instanceId, updatedInst);
+      modified = true;
+
+      const groupKey = `${existing.card_name}|${update.locationId}`;
+      if (!logGroups.has(groupKey)) {
+        logGroups.set(groupKey, {
+          card_name: existing.card_name,
+          count: 0,
+          to_location: update.locationId,
+          sample: updatedInst
+        });
+      }
+      logGroups.get(groupKey)!.count += 1;
+    }
+
+    if (modified) {
+      this.saveInstances();
+      this.touchUpdated();
+
+      for (const group of logGroups.values()) {
+        this.logActivity({
+          type: 'moved',
+          card_name: group.card_name,
+          count: group.count,
+          from_location: 'Brewing/Decks',
+          to_location: group.to_location,
+          details: `Returned ${group.count}x from brewing to drawer ${group.to_location}`,
+          instance_id: group.sample.instance_id,
+          instance_snapshot: { ...group.sample }
+        });
+      }
 
       this.notify();
     }
@@ -1237,6 +1422,7 @@ class ArcaDatabase {
     const existing = this.instances.get(instanceId);
     const res = this.instances.delete(instanceId);
     if (res && existing) {
+      this.removeInstanceFromNameIndex(existing);
       this.saveInstances();
       this.touchUpdated();
 
@@ -1265,6 +1451,7 @@ class ArcaDatabase {
       updated_at: new Date().toISOString()
     };
     this.instances.set(sanitized.instance_id, sanitized);
+    this.addInstanceToNameIndex(sanitized);
     this.saveInstances();
     this.touchUpdated();
 
@@ -1618,6 +1805,7 @@ class ArcaDatabase {
       if (snap.cards && Array.isArray(snap.cards)) {
         snap.cards.forEach((c: ScryfallCard) => this.cards.set(c.oracle_id, c));
       }
+      this.rebuildIndexes();
       this.saveInstances();
       this.saveCards();
       this.touchUpdated();
@@ -1875,6 +2063,7 @@ class ArcaDatabase {
       // 7. Overwrite active instances with normalized collection
       this.instances.clear();
       cleanInstances.forEach((inst: CardInstance) => this.instances.set(inst.instance_id, inst));
+      this.rebuildIndexes();
       this.saveInstances();
 
       this.touchUpdated(remoteTimestamp || data.timestamp || data.last_updated || Date.now());
@@ -1897,6 +2086,7 @@ class ArcaDatabase {
     SEED_CARDS.forEach(c => this.cards.set(c.oracle_id, c));
     SEED_INSTANCES.forEach(inst => this.instances.set(inst.instance_id, inst));
     SEED_CUSTOM_LISTS.forEach(l => this.customLists.set(l.id, { ...l, items: [...l.items] }));
+    this.rebuildIndexes();
     this.saveCards();
     this.saveInstances();
     this.saveCustomLists();

@@ -12,6 +12,48 @@ export function getScryfallImageFallback(cardName: string): string {
 }
 
 /**
+ * Reliable Multi-Tier Pricing: EUR -> USD conversion -> Foil EUR -> Foil USD
+ */
+export function extractCardPriceEur(raw: any): number {
+  if (raw.prices?.eur && !isNaN(parseFloat(raw.prices.eur)) && parseFloat(raw.prices.eur) > 0) {
+    return Math.round(parseFloat(raw.prices.eur) * 100) / 100;
+  }
+  if (raw.prices?.usd && !isNaN(parseFloat(raw.prices.usd)) && parseFloat(raw.prices.usd) > 0) {
+    return Math.round(parseFloat(raw.prices.usd) * 0.92 * 100) / 100;
+  }
+  if (raw.prices?.eur_foil && !isNaN(parseFloat(raw.prices.eur_foil)) && parseFloat(raw.prices.eur_foil) > 0) {
+    return Math.round(parseFloat(raw.prices.eur_foil) * 100) / 100;
+  }
+  if (raw.prices?.usd_foil && !isNaN(parseFloat(raw.prices.usd_foil)) && parseFloat(raw.prices.usd_foil) > 0) {
+    return Math.round(parseFloat(raw.prices.usd_foil) * 0.92 * 100) / 100;
+  }
+  return 0;
+}
+
+/**
+ * Smart Price Resolution:
+ * Inspects all available printings and defaults to the lowest non-zero priced version.
+ * This ignores unpriced £0 spoilers and filters out inflated promotional outliers.
+ */
+export function pickLowestNonZeroPrinting(printings: any[]): any {
+  if (!printings || printings.length === 0) return null;
+
+  let lowestPrinting: any = null;
+  let lowestPrice = Infinity;
+
+  for (const p of printings) {
+    const price = extractCardPriceEur(p);
+    if (price > 0 && price < lowestPrice) {
+      lowestPrice = price;
+      lowestPrinting = p;
+    }
+  }
+
+  // If none had a non-zero price, return the first paper printing
+  return lowestPrinting || printings[0];
+}
+
+/**
  * Normalizes raw Scryfall API json into our lean ArcaWMS schema
  */
 export function normalizeScryfallCard(raw: any): ScryfallCard {
@@ -35,18 +77,6 @@ export function normalizeScryfallCard(raw: any): ScryfallCard {
     oracleText = raw.card_faces.map((f: any) => `${f.name}: ${f.oracle_text || ''}`).join('\n//\n');
   }
 
-  // Reliable Multi-Tier Pricing: EUR -> USD conversion -> Foil EUR -> Foil USD
-  let priceEur = 0;
-  if (raw.prices?.eur && !isNaN(parseFloat(raw.prices.eur))) {
-    priceEur = parseFloat(raw.prices.eur);
-  } else if (raw.prices?.usd && !isNaN(parseFloat(raw.prices.usd))) {
-    priceEur = parseFloat(raw.prices.usd) * 0.92; // Convert USD to EUR
-  } else if (raw.prices?.eur_foil && !isNaN(parseFloat(raw.prices.eur_foil))) {
-    priceEur = parseFloat(raw.prices.eur_foil);
-  } else if (raw.prices?.usd_foil && !isNaN(parseFloat(raw.prices.usd_foil))) {
-    priceEur = parseFloat(raw.prices.usd_foil) * 0.92;
-  }
-
   return {
     oracle_id: raw.oracle_id || raw.id || generateUUID(),
     name: raw.name || 'Unknown Card',
@@ -57,7 +87,7 @@ export function normalizeScryfallCard(raw: any): ScryfallCard {
     color_identity: raw.color_identity || [],
     rarity: raw.rarity || 'common',
     image_url_normal: imageUrl,
-    price_eur: Math.round(priceEur * 100) / 100,
+    price_eur: extractCardPriceEur(raw),
     oracle_text: oracleText
   };
 }
@@ -73,157 +103,210 @@ function sleep(ms: number) {
 }
 
 /**
- * High-performance Batch Card Fetching using Scryfall's /cards/collection endpoint.
- * Fetches up to 75 cards in a SINGLE HTTP request, retrieving high-speed CDN images & prices.
+ * Helper to execute a Scryfall request with browser direct fetch and backend proxy fallback
  */
-export async function fetchScryfallCardsBatch(cardNames: string[]): Promise<Map<string, ScryfallCard>> {
-  const result = new Map<string, ScryfallCard>();
-  const toFetch: string[] = [];
-
-  for (const name of cardNames) {
-    const clean = name.trim();
-    if (!clean) continue;
-    const lower = clean.toLowerCase();
-    const cached = scryfallMemoryCache.get(lower);
-    if (cached && cached.price_eur > 0 && cached.image_url_normal.startsWith('https://cards.scryfall.io')) {
-      result.set(lower, cached);
-    } else {
-      toFetch.push(clean);
+async function fetchScryfallJson(url: string): Promise<any | null> {
+  try {
+    const headers: Record<string, string> = {
+      'Accept': 'application/json'
+    };
+    if (typeof window === 'undefined') {
+      headers['User-Agent'] = 'ArcaWMS/1.1 (MTG Chaos-Sorting WMS)';
     }
+    const res = await fetch(url, { headers });
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch {
+    // Direct fetch failed (CORS/offline/etc.)
   }
 
-  const uniqueNames = Array.from(new Set(toFetch));
-  if (uniqueNames.length === 0) return result;
-
-  // Process in chunks of up to 75 (Scryfall collection limit)
-  const CHUNK_SIZE = 75;
-  for (let i = 0; i < uniqueNames.length; i += CHUNK_SIZE) {
-    const chunk = uniqueNames.slice(i, i + CHUNK_SIZE);
-    const identifiers = chunk.map(name => ({ name }));
-
-    let data: any = null;
-
-    // 1. Direct browser fetch without forbidden User-Agent header (standard CORS)
-    try {
-      const res = await fetch('https://api.scryfall.com/cards/collection', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        },
-        body: JSON.stringify({ identifiers })
+  // Fallback to local server proxy if URL is search endpoint
+  try {
+    const parsedUrl = new URL(url);
+    if (parsedUrl.pathname === '/cards/search') {
+      const proxyUrl = `/api/scryfall/search?${parsedUrl.searchParams.toString()}`;
+      const proxyRes = await fetch(proxyUrl, {
+        headers: { 'Accept': 'application/json' }
       });
-      if (res.ok) {
-        data = await res.json();
-      }
-    } catch {
-      data = null;
-    }
-
-    // 2. If direct call failed (CORS block, network, ad-blocker), fallback to server proxy
-    if (!data) {
-      try {
-        const proxyRes = await fetch('/api/scryfall/collection', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json'
-          },
-          body: JSON.stringify({ identifiers })
-        });
-        if (proxyRes.ok) {
-          data = await proxyRes.json();
-        }
-      } catch (proxyErr) {
-        console.warn('Backend proxy fetch also failed:', proxyErr);
+      if (proxyRes.ok) {
+        return await proxyRes.json();
       }
     }
+  } catch {}
 
-    if (data && data.data) {
-      const returnedCards = data.data || [];
-      for (const raw of returnedCards) {
-        const norm = normalizeScryfallCard(raw);
-        const lower = norm.name.toLowerCase();
-        scryfallMemoryCache.set(lower, norm);
-        scryfallMemoryCache.set(norm.oracle_id, norm);
-        result.set(lower, norm);
-
-        // Also index front face if double-faced e.g. "Delver of Secrets // Insectile Aberration"
-        if (norm.name.includes(' // ')) {
-          const front = norm.name.split(' // ')[0].toLowerCase();
-          scryfallMemoryCache.set(front, norm);
-          result.set(front, norm);
-        }
-
-        db.upsertCard(norm);
-      }
-
-      // Handle cards not found in exact collection batch (try fuzzy lookup)
-      if (data.not_found && Array.isArray(data.not_found)) {
-        for (const nf of data.not_found) {
-          if (nf.name) {
-            await sleep(80); // rate limit pause
-            const single = await fetchScryfallCardByName(nf.name);
-            if (single) {
-              result.set(single.name.toLowerCase(), single);
-              db.upsertCard(single);
-            }
-          }
-        }
-      }
-    } else {
-      console.warn('Scryfall batch fetch returned no data for chunk');
-    }
-
-    if (i + CHUNK_SIZE < uniqueNames.length) {
-      await sleep(100); // 100ms interval between chunks
-    }
-  }
-
-  return result;
+  return null;
 }
 
 /**
- * Fetch a single card by name from Scryfall (exact or fuzzy)
+ * Fetch a single card by name from Scryfall.
+ * When no set is explicitly requested, uses smart price resolution:
+ * Queries all paper printings via Scryfall search and selects the lowest non-zero priced version!
+ * If a specific set is provided, queries for that exact set.
  */
-export async function fetchScryfallCardByName(cardName: string): Promise<ScryfallCard | null> {
-  const cleanName = cardName.trim().toLowerCase();
-  const cached = scryfallMemoryCache.get(cleanName);
+export async function fetchScryfallCardByName(cardName: string, specificSet?: string): Promise<ScryfallCard | null> {
+  const cleanName = cardName.trim();
+  if (!cleanName) return null;
+
+  const lowerName = cleanName.toLowerCase();
+  const cleanSet = specificSet?.trim().toLowerCase();
+  const cacheKey = cleanSet ? `${lowerName}@${cleanSet}` : lowerName;
+
+  const cached = scryfallMemoryCache.get(cacheKey) || (!cleanSet ? scryfallMemoryCache.get(lowerName) : undefined);
   if (cached && cached.price_eur > 0 && cached.image_url_normal.startsWith('https://cards.scryfall.io')) {
     return cached;
   }
 
   try {
-    const encoded = encodeURIComponent(cardName.trim());
-    let res = await fetch(`https://api.scryfall.com/cards/named?exact=${encoded}`, {
-      headers: {
-        'Accept': 'application/json'
+    // 1. If an explicit set was specified, try fetching that set directly
+    if (cleanSet) {
+      const setUrl = `https://api.scryfall.com/cards/named?exact=${encodeURIComponent(cleanName)}&set=${encodeURIComponent(cleanSet)}`;
+      const setData = await fetchScryfallJson(setUrl);
+      if (setData && !setData.status) {
+        const norm = normalizeScryfallCard(setData);
+        scryfallMemoryCache.set(cacheKey, norm);
+        scryfallMemoryCache.set(norm.name.toLowerCase(), norm);
+        scryfallMemoryCache.set(norm.oracle_id, norm);
+        db.upsertCard(norm);
+        return norm;
       }
-    });
-
-    if (!res.ok) {
-      // Try fuzzy if exact not found
-      await sleep(80);
-      res = await fetch(`https://api.scryfall.com/cards/named?fuzzy=${encoded}`, {
-        headers: {
-          'Accept': 'application/json'
-        }
-      });
     }
 
-    if (!res.ok) return null;
+    // 2. Smart Price Resolution: Fetch printings sorted by EUR ascending
+    // 1 single API call per card; ignores £0 spoilers and inflated promos
+    const searchName = cleanName.replace(/"/g, '');
+    const paperSearchUrl = `https://api.scryfall.com/cards/search?q=${encodeURIComponent('!"' + searchName + '" game:paper')}&unique=prints&order=eur&dir=asc`;
+    let data = await fetchScryfallJson(paperSearchUrl);
 
-    const data = await res.json();
-    const normalized = normalizeScryfallCard(data);
-    scryfallMemoryCache.set(cleanName, normalized);
-    scryfallMemoryCache.set(normalized.name.toLowerCase(), normalized);
-    scryfallMemoryCache.set(normalized.oracle_id, normalized);
-    db.upsertCard(normalized);
-    return normalized;
+    if (data && data.data && data.data.length > 0) {
+      const lowestPrinting = pickLowestNonZeroPrinting(data.data);
+      const normalized = normalizeScryfallCard(lowestPrinting);
+      scryfallMemoryCache.set(cacheKey, normalized);
+      scryfallMemoryCache.set(lowerName, normalized);
+      scryfallMemoryCache.set(normalized.name.toLowerCase(), normalized);
+      scryfallMemoryCache.set(normalized.oracle_id, normalized);
+      db.upsertCard(normalized);
+      return normalized;
+    }
+
+    // 3. Fallback: Search without game:paper constraint (for digital-only or tokens)
+    await sleep(60);
+    const generalSearchUrl = `https://api.scryfall.com/cards/search?q=${encodeURIComponent('!"' + searchName + '"')}&unique=prints&order=eur&dir=asc`;
+    data = await fetchScryfallJson(generalSearchUrl);
+    if (data && data.data && data.data.length > 0) {
+      const lowestPrinting = pickLowestNonZeroPrinting(data.data);
+      const normalized = normalizeScryfallCard(lowestPrinting);
+      scryfallMemoryCache.set(cacheKey, normalized);
+      scryfallMemoryCache.set(lowerName, normalized);
+      scryfallMemoryCache.set(normalized.name.toLowerCase(), normalized);
+      scryfallMemoryCache.set(normalized.oracle_id, normalized);
+      db.upsertCard(normalized);
+      return normalized;
+    }
+
+    // 4. Fallback: Exact named endpoint
+    await sleep(60);
+    const exactUrl = `https://api.scryfall.com/cards/named?exact=${encodeURIComponent(cleanName)}`;
+    data = await fetchScryfallJson(exactUrl);
+
+    // 5. Fallback: Fuzzy named endpoint
+    if (!data || data.status === 404) {
+      await sleep(60);
+      const fuzzyUrl = `https://api.scryfall.com/cards/named?fuzzy=${encodeURIComponent(cleanName)}`;
+      data = await fetchScryfallJson(fuzzyUrl);
+    }
+
+    if (data && !data.status) {
+      const normalized = normalizeScryfallCard(data);
+      scryfallMemoryCache.set(cacheKey, normalized);
+      scryfallMemoryCache.set(lowerName, normalized);
+      scryfallMemoryCache.set(normalized.name.toLowerCase(), normalized);
+      scryfallMemoryCache.set(normalized.oracle_id, normalized);
+      db.upsertCard(normalized);
+      return normalized;
+    }
+
+    return null;
   } catch (err) {
     console.warn(`Failed to fetch card "${cardName}" from Scryfall:`, err);
     return null;
   }
+}
+
+export type BatchCardItem = string | { name: string; set?: string };
+
+/**
+ * High-performance Batch Card Fetching with Smart Price Resolution.
+ * Resolves each card to its lowest non-zero priced version, stripping out £0 spoilers and inflated promos.
+ * Uses local database & memory caches to bypass already-resolved cards in O(1) time.
+ * For un-cached cards, utilizes a concurrent worker pool (3 workers, 75ms stagger) to stay safely within rate limits.
+ */
+export async function fetchScryfallCardsBatch(
+  cardInputs: BatchCardItem[]
+): Promise<Map<string, ScryfallCard>> {
+  const result = new Map<string, ScryfallCard>();
+  const toFetch: { name: string; set?: string }[] = [];
+
+  for (const item of cardInputs) {
+    const rawName = typeof item === 'string' ? item : item.name;
+    const set = typeof item === 'object' && item.set ? item.set.trim().toLowerCase() : undefined;
+    const clean = rawName.trim();
+    if (!clean) continue;
+    const lower = clean.toLowerCase();
+    const cacheKey = set ? `${lower}@${set}` : lower;
+
+    // 1. Check in-memory cache
+    const cached = scryfallMemoryCache.get(cacheKey) || (!set ? scryfallMemoryCache.get(lower) : undefined);
+    if (cached && cached.price_eur > 0 && cached.image_url_normal.startsWith('https://cards.scryfall.io')) {
+      result.set(lower, cached);
+      continue;
+    }
+
+    // 2. Check local database
+    const dbCard = db.getCard(lower);
+    if (!set && dbCard && dbCard.price_eur > 0 && dbCard.image_url_normal.startsWith('https://cards.scryfall.io')) {
+      result.set(lower, dbCard);
+      scryfallMemoryCache.set(lower, dbCard);
+      continue;
+    }
+
+    // 3. Queue for fetching
+    if (!toFetch.some(f => f.name.toLowerCase() === lower && f.set === set)) {
+      toFetch.push({ name: clean, set });
+    }
+  }
+
+  if (toFetch.length === 0) return result;
+
+  const CONCURRENCY = 3;
+  let queueIndex = 0;
+  const cardsToUpsert: ScryfallCard[] = [];
+
+  async function worker() {
+    while (queueIndex < toFetch.length) {
+      const idx = queueIndex++;
+      const { name, set } = toFetch[idx];
+      try {
+        const card = await fetchScryfallCardByName(name, set);
+        if (card) {
+          result.set(name.toLowerCase(), card);
+          cardsToUpsert.push(card);
+        }
+      } catch (err) {
+        console.warn(`Worker error fetching card "${name}":`, err);
+      }
+      await sleep(75);
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(CONCURRENCY, toFetch.length) }, () => worker());
+  await Promise.all(workers);
+
+  if (cardsToUpsert.length > 0) {
+    db.upsertCardsBatch(cardsToUpsert);
+  }
+
+  return result;
 }
 
 /**
