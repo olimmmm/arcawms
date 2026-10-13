@@ -813,11 +813,23 @@ class ArcaDatabase {
 
     // 2. O(1) Fast lookup by oracle_id
     const byId = this.cards.get(oracleIdOrName);
-    if (byId) return byId;
+    if (byId) {
+      const canonical = this.cardsByName.get(byId.name.trim().toLowerCase());
+      if (canonical && canonical.price_eur > 0 && canonical.price_eur < byId.price_eur) {
+        return canonical;
+      }
+      return byId;
+    }
 
     // 3. Fallback: oracle_id might match lowercase clean
     const byIdClean = this.cards.get(clean);
-    if (byIdClean) return byIdClean;
+    if (byIdClean) {
+      const canonical = this.cardsByName.get(byIdClean.name.trim().toLowerCase());
+      if (canonical && canonical.price_eur > 0 && canonical.price_eur < byIdClean.price_eur) {
+        return canonical;
+      }
+      return byIdClean;
+    }
 
     return undefined;
   }

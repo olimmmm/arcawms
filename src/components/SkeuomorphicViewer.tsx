@@ -100,7 +100,7 @@ export const SkeuomorphicViewer: React.FC = () => {
     const map = new Map<string, ScryfallCard>();
     for (const c of cards) {
       const existing = map.get(c.name.toLowerCase());
-      if (!existing || (c.price_eur > 0 && existing.price_eur === 0)) {
+      if (!existing || existing.price_eur === 0 || (c.price_eur > 0 && c.price_eur < existing.price_eur)) {
         map.set(c.name.toLowerCase(), c);
       }
       map.set(c.oracle_id, c);

@@ -12,6 +12,7 @@ export interface ScryfallCard {
   image_url_normal: string;
   price_eur: number;
   oracle_text?: string;
+  is_smart_resolved?: boolean;
 }
 
 export interface CardInstance {

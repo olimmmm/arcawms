@@ -12,45 +12,102 @@ export function getScryfallImageFallback(cardName: string): string {
 }
 
 /**
- * Reliable Multi-Tier Pricing: EUR -> USD conversion -> Foil EUR -> Foil USD
+ * Reliable Multi-Tier Pricing: EUR market prices preferred, USD conversion fallback
  */
 export function extractCardPriceEur(raw: any): number {
-  if (raw.prices?.eur && !isNaN(parseFloat(raw.prices.eur)) && parseFloat(raw.prices.eur) > 0) {
-    return Math.round(parseFloat(raw.prices.eur) * 100) / 100;
+  if (!raw || !raw.prices) return 0;
+  const candidates: number[] = [];
+
+  // Preferred: EUR market price (non-foil or foil)
+  if (raw.prices.eur && !isNaN(parseFloat(raw.prices.eur)) && parseFloat(raw.prices.eur) > 0) {
+    candidates.push(parseFloat(raw.prices.eur));
   }
-  if (raw.prices?.usd && !isNaN(parseFloat(raw.prices.usd)) && parseFloat(raw.prices.usd) > 0) {
-    return Math.round(parseFloat(raw.prices.usd) * 0.92 * 100) / 100;
+  if (raw.prices.eur_foil && !isNaN(parseFloat(raw.prices.eur_foil)) && parseFloat(raw.prices.eur_foil) > 0) {
+    candidates.push(parseFloat(raw.prices.eur_foil));
   }
-  if (raw.prices?.eur_foil && !isNaN(parseFloat(raw.prices.eur_foil)) && parseFloat(raw.prices.eur_foil) > 0) {
-    return Math.round(parseFloat(raw.prices.eur_foil) * 100) / 100;
+
+  if (candidates.length > 0) {
+    return Math.round(Math.min(...candidates) * 100) / 100;
   }
-  if (raw.prices?.usd_foil && !isNaN(parseFloat(raw.prices.usd_foil)) && parseFloat(raw.prices.usd_foil) > 0) {
-    return Math.round(parseFloat(raw.prices.usd_foil) * 0.92 * 100) / 100;
+
+  // Fallback: USD converted to EUR (~0.92)
+  if (raw.prices.usd && !isNaN(parseFloat(raw.prices.usd)) && parseFloat(raw.prices.usd) > 0) {
+    candidates.push(parseFloat(raw.prices.usd) * 0.92);
   }
+  if (raw.prices.usd_foil && !isNaN(parseFloat(raw.prices.usd_foil)) && parseFloat(raw.prices.usd_foil) > 0) {
+    candidates.push(parseFloat(raw.prices.usd_foil) * 0.92);
+  }
+
+  if (candidates.length > 0) {
+    return Math.round(Math.min(...candidates) * 100) / 100;
+  }
+
   return 0;
 }
 
 /**
+ * Detects whether a printing is an inflated promotional or collector outlier:
+ * - Secret Lair Drops (set: 'sld')
+ * - Special premium foil finishes (surgefoil, serialized, confetti, galaxyfoil, textured, etc.)
+ * - Oversized, memorabilia, or box sets
+ */
+export function isInflatedOutlier(p: any): boolean {
+  if (!p) return false;
+  if (p.oversized) return true;
+  if (p.set === 'sld' || p.set_name?.toLowerCase().includes('secret lair')) return true;
+  if (Array.isArray(p.promo_types)) {
+    const outlierTypes = [
+      'surgefoil', 'serialized', 'confetti', 'galaxyfoil', 'textured',
+      'stepandcompleat', 'oilslick', 'neonink', 'doublerainbow', 'gilded',
+      'embossed', 'halofoil', 'thick', 'concept'
+    ];
+    if (p.promo_types.some((t: string) => outlierTypes.includes(t.toLowerCase()))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Smart Price Resolution:
- * Inspects all available printings and defaults to the lowest non-zero priced version.
- * This ignores unpriced £0 spoilers and filters out inflated promotional outliers.
+ * Inspects all available printings and defaults to the lowest non-zero priced standard version.
+ * Filters out inflated promotional outliers (e.g. Secret Lairs, surge foils, serialized cards)
+ * while also ignoring unpriced £0 spoilers.
  */
 export function pickLowestNonZeroPrinting(printings: any[]): any {
   if (!printings || printings.length === 0) return null;
 
-  let lowestPrinting: any = null;
-  let lowestPrice = Infinity;
+  // Tier 1: Standard non-outlier printings (ignoring Secret Lairs, surgefoils, serialized, etc.)
+  const standardPrintings = printings.filter(p => !isInflatedOutlier(p));
+  let lowestStd: any = null;
+  let lowestStdPrice = Infinity;
 
-  for (const p of printings) {
+  for (const p of standardPrintings) {
     const price = extractCardPriceEur(p);
-    if (price > 0 && price < lowestPrice) {
-      lowestPrice = price;
-      lowestPrinting = p;
+    if (price > 0 && price < lowestStdPrice) {
+      lowestStdPrice = price;
+      lowestStd = p;
     }
   }
 
-  // If none had a non-zero price, return the first paper printing
-  return lowestPrinting || printings[0];
+  if (lowestStd) {
+    return lowestStd;
+  }
+
+  // Tier 2: All printings with price > 0 (if card was ONLY printed in Secret Lair or special promo)
+  let lowestAll: any = null;
+  let lowestAllPrice = Infinity;
+
+  for (const p of printings) {
+    const price = extractCardPriceEur(p);
+    if (price > 0 && price < lowestAllPrice) {
+      lowestAllPrice = price;
+      lowestAll = p;
+    }
+  }
+
+  // If none had a non-zero price, return first standard printing or first printing
+  return lowestAll || (standardPrintings.length > 0 ? standardPrintings[0] : printings[0]);
 }
 
 /**
@@ -88,7 +145,8 @@ export function normalizeScryfallCard(raw: any): ScryfallCard {
     rarity: raw.rarity || 'common',
     image_url_normal: imageUrl,
     price_eur: extractCardPriceEur(raw),
-    oracle_text: oracleText
+    oracle_text: oracleText,
+    is_smart_resolved: true
   };
 }
 
@@ -153,17 +211,35 @@ export async function fetchScryfallCardByName(cardName: string, specificSet?: st
   const cacheKey = cleanSet ? `${lowerName}@${cleanSet}` : lowerName;
 
   const cached = scryfallMemoryCache.get(cacheKey) || (!cleanSet ? scryfallMemoryCache.get(lowerName) : undefined);
-  if (cached && cached.price_eur > 0 && cached.image_url_normal.startsWith('https://cards.scryfall.io')) {
+  if (cached && cached.price_eur > 0 && cached.image_url_normal.startsWith('https://cards.scryfall.io') && cached.is_smart_resolved) {
     return cached;
   }
 
   try {
-    // 1. If an explicit set was specified, try fetching that set directly
+    const searchName = cleanName.replace(/"/g, '');
+
+    // 1. If an explicit set was specified, search for printings in that set first
+    // (e.g. for Marneus Calgar in 40K, picks collector 175 at €10.31 instead of surge foil collector 8 at €59.63!)
     if (cleanSet) {
+      const setPrintsUrl = `https://api.scryfall.com/cards/search?q=${encodeURIComponent('!"' + searchName + '" set:' + cleanSet)}&unique=prints&order=eur&dir=asc`;
+      const setData = await fetchScryfallJson(setPrintsUrl);
+      if (setData && setData.data && setData.data.length > 0) {
+        const lowestPrinting = pickLowestNonZeroPrinting(setData.data);
+        const norm = normalizeScryfallCard(lowestPrinting);
+        norm.is_smart_resolved = true;
+        scryfallMemoryCache.set(cacheKey, norm);
+        scryfallMemoryCache.set(norm.name.toLowerCase(), norm);
+        scryfallMemoryCache.set(norm.oracle_id, norm);
+        db.upsertCard(norm);
+        return norm;
+      }
+
+      // Fallback for set: /cards/named?exact=...&set=...
       const setUrl = `https://api.scryfall.com/cards/named?exact=${encodeURIComponent(cleanName)}&set=${encodeURIComponent(cleanSet)}`;
-      const setData = await fetchScryfallJson(setUrl);
-      if (setData && !setData.status) {
-        const norm = normalizeScryfallCard(setData);
+      const namedSetData = await fetchScryfallJson(setUrl);
+      if (namedSetData && !namedSetData.status) {
+        const norm = normalizeScryfallCard(namedSetData);
+        norm.is_smart_resolved = true;
         scryfallMemoryCache.set(cacheKey, norm);
         scryfallMemoryCache.set(norm.name.toLowerCase(), norm);
         scryfallMemoryCache.set(norm.oracle_id, norm);
@@ -174,13 +250,13 @@ export async function fetchScryfallCardByName(cardName: string, specificSet?: st
 
     // 2. Smart Price Resolution: Fetch printings sorted by EUR ascending
     // 1 single API call per card; ignores £0 spoilers and inflated promos
-    const searchName = cleanName.replace(/"/g, '');
     const paperSearchUrl = `https://api.scryfall.com/cards/search?q=${encodeURIComponent('!"' + searchName + '" game:paper')}&unique=prints&order=eur&dir=asc`;
     let data = await fetchScryfallJson(paperSearchUrl);
 
     if (data && data.data && data.data.length > 0) {
       const lowestPrinting = pickLowestNonZeroPrinting(data.data);
       const normalized = normalizeScryfallCard(lowestPrinting);
+      normalized.is_smart_resolved = true;
       scryfallMemoryCache.set(cacheKey, normalized);
       scryfallMemoryCache.set(lowerName, normalized);
       scryfallMemoryCache.set(normalized.name.toLowerCase(), normalized);
@@ -196,6 +272,7 @@ export async function fetchScryfallCardByName(cardName: string, specificSet?: st
     if (data && data.data && data.data.length > 0) {
       const lowestPrinting = pickLowestNonZeroPrinting(data.data);
       const normalized = normalizeScryfallCard(lowestPrinting);
+      normalized.is_smart_resolved = true;
       scryfallMemoryCache.set(cacheKey, normalized);
       scryfallMemoryCache.set(lowerName, normalized);
       scryfallMemoryCache.set(normalized.name.toLowerCase(), normalized);
@@ -217,7 +294,29 @@ export async function fetchScryfallCardByName(cardName: string, specificSet?: st
     }
 
     if (data && !data.status) {
+      // If named or fuzzy endpoint succeeded, query all prints for this oracle_id
+      // to avoid returning the default newest Secret Lair or Surge Foil!
+      if (data.oracle_id) {
+        try {
+          await sleep(60);
+          const oraclePrintsUrl = `https://api.scryfall.com/cards/search?q=oracleid%3A${encodeURIComponent(data.oracle_id)}+game%3Apaper&unique=prints&order=eur&dir=asc`;
+          const oracleData = await fetchScryfallJson(oraclePrintsUrl);
+          if (oracleData && oracleData.data && oracleData.data.length > 0) {
+            const lowest = pickLowestNonZeroPrinting(oracleData.data);
+            const normalized = normalizeScryfallCard(lowest);
+            normalized.is_smart_resolved = true;
+            scryfallMemoryCache.set(cacheKey, normalized);
+            scryfallMemoryCache.set(lowerName, normalized);
+            scryfallMemoryCache.set(normalized.name.toLowerCase(), normalized);
+            scryfallMemoryCache.set(normalized.oracle_id, normalized);
+            db.upsertCard(normalized);
+            return normalized;
+          }
+        } catch {}
+      }
+
       const normalized = normalizeScryfallCard(data);
+      normalized.is_smart_resolved = true;
       scryfallMemoryCache.set(cacheKey, normalized);
       scryfallMemoryCache.set(lowerName, normalized);
       scryfallMemoryCache.set(normalized.name.toLowerCase(), normalized);
@@ -257,14 +356,14 @@ export async function fetchScryfallCardsBatch(
 
     // 1. Check in-memory cache
     const cached = scryfallMemoryCache.get(cacheKey) || (!set ? scryfallMemoryCache.get(lower) : undefined);
-    if (cached && cached.price_eur > 0 && cached.image_url_normal.startsWith('https://cards.scryfall.io')) {
+    if (cached && cached.price_eur > 0 && cached.image_url_normal.startsWith('https://cards.scryfall.io') && cached.is_smart_resolved) {
       result.set(lower, cached);
       continue;
     }
 
     // 2. Check local database
     const dbCard = db.getCard(lower);
-    if (!set && dbCard && dbCard.price_eur > 0 && dbCard.image_url_normal.startsWith('https://cards.scryfall.io')) {
+    if (!set && dbCard && dbCard.price_eur > 0 && dbCard.image_url_normal.startsWith('https://cards.scryfall.io') && dbCard.is_smart_resolved) {
       result.set(lower, dbCard);
       scryfallMemoryCache.set(lower, dbCard);
       continue;
@@ -311,7 +410,7 @@ export async function fetchScryfallCardsBatch(
 
 /**
  * Background Card Metadata & Price Auto-Enricher
- * Scans the database for cards with missing CDN images or €0.00 prices,
+ * Scans the database for cards with missing CDN images, €0.00 prices, or un-resolved promo outliers,
  * and fetches them in fast 75-card batches from Scryfall.
  */
 let isEnriching = false;
@@ -328,7 +427,7 @@ export async function enrichMissingCards(): Promise<number> {
     const cardMap = new Map<string, ScryfallCard>();
     allCards.forEach(c => {
       const existing = cardMap.get(c.name.toLowerCase());
-      if (!existing || (c.price_eur > 0 && existing.price_eur === 0)) {
+      if (!existing || existing.price_eur === 0 || (c.price_eur > 0 && c.price_eur < existing.price_eur)) {
         cardMap.set(c.name.toLowerCase(), c);
       }
       cardMap.set(c.oracle_id, c);
@@ -342,8 +441,9 @@ export async function enrichMissingCards(): Promise<number> {
       const meta = cardMap.get(clean) || cardMap.get(inst.oracle_id);
       const needsImage = !meta || !meta.image_url_normal || !meta.image_url_normal.startsWith('https://cards.scryfall.io');
       const needsPrice = !meta || !meta.price_eur || meta.price_eur === 0;
+      const needsResolution = !meta || !meta.is_smart_resolved;
 
-      if (needsImage || needsPrice) {
+      if (needsImage || needsPrice || needsResolution) {
         namesToEnrich.add(inst.card_name.trim());
       }
     }
@@ -353,8 +453,9 @@ export async function enrichMissingCards(): Promise<number> {
       if (alreadyCheckedEnrichNames.has(clean)) continue;
       const needsImage = !c.image_url_normal || !c.image_url_normal.startsWith('https://cards.scryfall.io');
       const needsPrice = !c.price_eur || c.price_eur === 0;
+      const needsResolution = !c.is_smart_resolved;
 
-      if (needsImage || needsPrice) {
+      if (needsImage || needsPrice || needsResolution) {
         namesToEnrich.add(c.name.trim());
       }
     }
@@ -408,13 +509,14 @@ export async function scryfallAutocomplete(prefix: string): Promise<string[]> {
 export async function searchScryfallAPI(query: string): Promise<ScryfallCard[]> {
   if (!query.trim()) return [];
   try {
-    const res = await fetch(`https://api.scryfall.com/cards/search?q=${encodeURIComponent(query)}&order=name`, {
+    const res = await fetch(`https://api.scryfall.com/cards/search?q=${encodeURIComponent(query)}&order=eur&dir=asc`, {
       headers: { 'Accept': 'application/json' }
     });
     if (!res.ok) return [];
     const data = await res.json();
     return (data.data || []).map((c: any) => {
       const norm = normalizeScryfallCard(c);
+      norm.is_smart_resolved = true;
       scryfallMemoryCache.set(norm.name.toLowerCase(), norm);
       return norm;
     });

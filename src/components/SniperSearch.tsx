@@ -301,7 +301,7 @@ export const SniperSearch: React.FC = () => {
     for (const card of cards) {
       const key = card.name.trim().toLowerCase();
       const existing = dedupedMap.get(key);
-      if (!existing || (card.price_eur > 0 && existing.price_eur === 0)) {
+      if (!existing || existing.price_eur === 0 || (card.price_eur > 0 && card.price_eur < existing.price_eur)) {
         dedupedMap.set(key, card);
       }
     }

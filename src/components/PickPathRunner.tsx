@@ -65,8 +65,11 @@ export const PickPathRunner: React.FC<PickPathRunnerProps> = ({ pendingDecklist,
   const cardDictionary = useMemo(() => {
     const map = new Map<string, ScryfallCard>();
     for (const c of cards) {
+      const existing = map.get(c.name.toLowerCase());
+      if (!existing || existing.price_eur === 0 || (c.price_eur > 0 && c.price_eur < existing.price_eur)) {
+        map.set(c.name.toLowerCase(), c);
+      }
       map.set(c.oracle_id, c);
-      map.set(c.name.toLowerCase(), c);
     }
     return map;
   }, [cards]);

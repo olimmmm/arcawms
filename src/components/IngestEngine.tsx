@@ -127,7 +127,7 @@ export const IngestEngine: React.FC = () => {
     const cardsToFetch = parsed
       .filter(item => {
         const c = db.getCard(item.name);
-        return !c || !c.image_url_normal || !c.image_url_normal.startsWith('https://cards.scryfall.io') || !c.price_eur;
+        return !c || !c.image_url_normal || !c.image_url_normal.startsWith('https://cards.scryfall.io') || !c.price_eur || !c.is_smart_resolved;
       })
       .map(item => ({ name: item.name, set: item.set }));
 
@@ -141,8 +141,8 @@ export const IngestEngine: React.FC = () => {
 
     for (const item of parsed) {
       let meta = db.getCard(item.name);
-      if (!meta) {
-        meta = (await fetchScryfallCardByName(item.name, item.set)) || {
+      if (!meta || !meta.is_smart_resolved) {
+        meta = (await fetchScryfallCardByName(item.name, item.set)) || meta || {
           oracle_id: generateUUID(),
           name: item.name,
           cmc: 0,
@@ -151,7 +151,8 @@ export const IngestEngine: React.FC = () => {
           color_identity: [],
           rarity: 'common',
           image_url_normal: getScryfallImageFallback(item.name),
-          price_eur: 0
+          price_eur: 0,
+          is_smart_resolved: true
         };
         missingCardsToUpsert.push(meta);
       }
