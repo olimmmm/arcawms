@@ -916,7 +916,7 @@ export const SkeuomorphicViewer: React.FC = () => {
                     <div
                       key={inst.instance_id}
                       className={`bg-slate-950 border rounded-2xl shadow-lg transition flex flex-col justify-between relative ${
-                        cardMenuOpenId === inst.instance_id ? 'z-30 overflow-visible' : 'overflow-hidden'
+                        cardMenuOpenId === inst.instance_id ? 'z-30 overflow-visible' : 'z-0 overflow-hidden'
                       } ${
                         inst.is_for_sale ? 'border-for-sale' : 'border-slate-800 hover:border-theme-accent'
                       }`}
@@ -936,7 +936,7 @@ export const SkeuomorphicViewer: React.FC = () => {
                         </div>
 
                         {/* Top-Left `+` Menu Button */}
-                        <div className="absolute top-1.5 left-1.5 z-40">
+                        <div className={`absolute top-1.5 left-1.5 ${cardMenuOpenId === inst.instance_id ? 'z-30' : 'z-10'}`}>
                           <button
                             type="button"
                             onClick={(e) => {
@@ -1137,7 +1137,7 @@ export const SkeuomorphicViewer: React.FC = () => {
                     <div
                       key={inst.instance_id}
                       className={`bg-slate-950 border rounded-2xl shadow-lg transition flex flex-col justify-between relative ${
-                        cardMenuOpenId === inst.instance_id ? 'z-30 overflow-visible' : 'overflow-hidden'
+                        cardMenuOpenId === inst.instance_id ? 'z-30 overflow-visible' : 'z-0 overflow-hidden'
                       } ${
                         inst.is_for_sale 
                           ? 'border-for-sale' 
@@ -1159,7 +1159,7 @@ export const SkeuomorphicViewer: React.FC = () => {
                         </div>
 
                         {/* Top-Left `+` Menu Button */}
-                        <div className="absolute top-1.5 left-1.5 z-40">
+                        <div className={`absolute top-1.5 left-1.5 ${cardMenuOpenId === inst.instance_id ? 'z-30' : 'z-10'}`}>
                           <button
                             type="button"
                             onClick={(e) => {
@@ -1367,7 +1367,7 @@ export const SkeuomorphicViewer: React.FC = () => {
                     <div
                       key={inst.instance_id}
                       className={`bg-slate-950 border rounded-2xl shadow-lg transition flex flex-col justify-between relative ${
-                        cardMenuOpenId === inst.instance_id ? 'z-30 overflow-visible' : 'overflow-hidden'
+                        cardMenuOpenId === inst.instance_id ? 'z-30 overflow-visible' : 'z-0 overflow-hidden'
                       } ${
                         inst.is_for_sale ? 'border-for-sale' : 'border-slate-800 hover:border-purple-500/60'
                       }`}
@@ -1387,7 +1387,7 @@ export const SkeuomorphicViewer: React.FC = () => {
                         </div>
 
                         {/* Top-Left `+` Menu Button */}
-                        <div className="absolute top-1.5 left-1.5 z-40">
+                        <div className={`absolute top-1.5 left-1.5 ${cardMenuOpenId === inst.instance_id ? 'z-30' : 'z-10'}`}>
                           <button
                             type="button"
                             onClick={(e) => {

@@ -762,12 +762,13 @@ export const SniperSearch: React.FC = () => {
 
           const cardHasForSale = cardInstances.some(i => i.is_for_sale);
           const cardHasBrewProxy = cardInstances.some(i => i.is_proxy && i.state === 'B');
+          const isAnyCardMenuOpen = cardMenuOpenId === card.oracle_id || cardInstances.some(i => i.instance_id === cardMenuOpenId);
 
           return (
             <div
               key={card.oracle_id}
               className={`bg-slate-900 rounded-2xl p-4 sm:p-5 shadow-lg flex flex-col sm:flex-row gap-4 sm:gap-5 transition-all relative ${
-                cardMenuOpenId === card.oracle_id ? 'z-30' : 'z-0'
+                isAnyCardMenuOpen ? 'z-30' : 'z-0'
               } ${
                 cardHasForSale
                   ? 'border-2 border-red-500/80 shadow-[0_0_15px_rgba(239,68,68,0.25)]'
@@ -775,7 +776,7 @@ export const SniperSearch: React.FC = () => {
               }`}
             >
               {/* Reliable Card Image with Automatic Fallback & Floating Top-Left '+' Menu */}
-              <div className={`relative w-24 sm:w-28 shrink-0 self-start ${cardMenuOpenId === card.oracle_id ? 'z-40' : 'z-10'}`}>
+              <div className={`relative w-24 sm:w-28 shrink-0 self-start ${cardMenuOpenId === card.oracle_id ? 'z-30' : 'z-10'}`}>
                 {/* Visual Image Box (maintains rounded corners without clipping menu popup) */}
                 <div className={`relative w-full rounded-xl overflow-hidden bg-slate-950 shadow transition-all ${
                   cardHasForSale
@@ -810,7 +811,7 @@ export const SniperSearch: React.FC = () => {
                 </div>
 
                 {/* Top-Left `+` Menu Button & Unclipped Floating Dropdown Menu */}
-                <div className="absolute top-1.5 left-1.5 z-50">
+                <div className={`absolute top-1.5 left-1.5 ${cardMenuOpenId === card.oracle_id ? 'z-30' : 'z-10'}`}>
                   <button
                     type="button"
                     onClick={(e) => {
@@ -1213,7 +1214,7 @@ export const SniperSearch: React.FC = () => {
                               )}
 
                               {/* Copy Individual Options Menu Toggle */}
-                              <div className="relative">
+                              <div className={`relative ${cardMenuOpenId === inst.instance_id ? 'z-40' : ''}`}>
                                 <button
                                   type="button"
                                   onClick={(e) => {
