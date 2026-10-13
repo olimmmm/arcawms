@@ -332,7 +332,53 @@ export async function fetchScryfallCardByName(cardName: string, specificSet?: st
   }
 }
 
+export interface EnrichProgressState {
+  isActive: boolean;
+  processed: number;
+  total: number;
+  currentCard?: string;
+}
+
+export type EnrichProgressListener = (state: EnrichProgressState) => void;
+
+let currentEnrichState: EnrichProgressState = {
+  isActive: false,
+  processed: 0,
+  total: 0,
+  currentCard: undefined
+};
+
+const progressListeners = new Set<EnrichProgressListener>();
+
+export function subscribeEnrichProgress(listener: EnrichProgressListener): () => void {
+  progressListeners.add(listener);
+  try {
+    listener(currentEnrichState);
+  } catch (e) {
+    console.warn('Error in subscribeEnrichProgress initial call:', e);
+  }
+  return () => {
+    progressListeners.delete(listener);
+  };
+}
+
+export function getCurrentEnrichProgress(): EnrichProgressState {
+  return currentEnrichState;
+}
+
+function notifyEnrichProgress(state: EnrichProgressState) {
+  currentEnrichState = state;
+  progressListeners.forEach(fn => {
+    try {
+      fn(state);
+    } catch (e) {
+      console.warn('Error in enrich progress listener:', e);
+    }
+  });
+}
+
 export type BatchCardItem = string | { name: string; set?: string };
+export type BatchProgressCallback = (processed: number, total: number, currentCardName?: string) => void;
 
 /**
  * High-performance Batch Card Fetching with Smart Price Resolution.
@@ -341,7 +387,8 @@ export type BatchCardItem = string | { name: string; set?: string };
  * For un-cached cards, utilizes a concurrent worker pool (3 workers, 75ms stagger) to stay safely within rate limits.
  */
 export async function fetchScryfallCardsBatch(
-  cardInputs: BatchCardItem[]
+  cardInputs: BatchCardItem[],
+  onProgress?: BatchProgressCallback
 ): Promise<Map<string, ScryfallCard>> {
   const result = new Map<string, ScryfallCard>();
   const toFetch: { name: string; set?: string }[] = [];
@@ -375,10 +422,16 @@ export async function fetchScryfallCardsBatch(
     }
   }
 
-  if (toFetch.length === 0) return result;
+  if (toFetch.length === 0) {
+    onProgress?.(0, 0);
+    return result;
+  }
+
+  onProgress?.(0, toFetch.length);
 
   const CONCURRENCY = 3;
   let queueIndex = 0;
+  let completedCount = 0;
   const cardsToUpsert: ScryfallCard[] = [];
 
   async function worker() {
@@ -394,6 +447,14 @@ export async function fetchScryfallCardsBatch(
       } catch (err) {
         console.warn(`Worker error fetching card "${name}":`, err);
       }
+      completedCount++;
+      onProgress?.(completedCount, toFetch.length, name);
+
+      if (cardsToUpsert.length >= 15) {
+        const batch = cardsToUpsert.splice(0, cardsToUpsert.length);
+        db.upsertCardsBatch(batch);
+      }
+
       await sleep(75);
     }
   }
@@ -404,6 +465,8 @@ export async function fetchScryfallCardsBatch(
   if (cardsToUpsert.length > 0) {
     db.upsertCardsBatch(cardsToUpsert);
   }
+
+  onProgress?.(toFetch.length, toFetch.length);
 
   return result;
 }
@@ -416,9 +479,13 @@ export async function fetchScryfallCardsBatch(
 let isEnriching = false;
 const alreadyCheckedEnrichNames = new Set<string>();
 
-export async function enrichMissingCards(): Promise<number> {
+export async function enrichMissingCards(force = false): Promise<number> {
   if (isEnriching) return 0;
   isEnriching = true;
+
+  if (force) {
+    alreadyCheckedEnrichNames.clear();
+  }
 
   try {
     const allInstances = db.getAllInstances();
@@ -466,16 +533,38 @@ export async function enrichMissingCards(): Promise<number> {
     }
 
     if (namesToEnrich.size === 0) {
+      notifyEnrichProgress({ isActive: false, processed: 0, total: 0 });
       return 0;
     }
 
     const namesList = Array.from(namesToEnrich);
-    const fetchedMap = await fetchScryfallCardsBatch(namesList);
+    notifyEnrichProgress({
+      isActive: true,
+      processed: 0,
+      total: namesList.length,
+      currentCard: 'Starting price resolution...'
+    });
+
+    const fetchedMap = await fetchScryfallCardsBatch(namesList, (processed, total, currentCard) => {
+      notifyEnrichProgress({
+        isActive: true,
+        processed,
+        total,
+        currentCard
+      });
+    });
 
     const cardsToUpsert = Array.from(fetchedMap.values());
     if (cardsToUpsert.length > 0) {
       db.upsertCardsBatch(cardsToUpsert);
     }
+
+    notifyEnrichProgress({
+      isActive: true,
+      processed: namesList.length,
+      total: namesList.length,
+      currentCard: 'Completed'
+    });
 
     return cardsToUpsert.length;
   } catch (e) {
@@ -483,6 +572,14 @@ export async function enrichMissingCards(): Promise<number> {
     return 0;
   } finally {
     isEnriching = false;
+    setTimeout(() => {
+      notifyEnrichProgress({
+        isActive: false,
+        processed: 0,
+        total: 0,
+        currentCard: undefined
+      });
+    }, 1500);
   }
 }
 

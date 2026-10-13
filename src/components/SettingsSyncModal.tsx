@@ -17,18 +17,43 @@ import {
   Boxes,
   Plus,
   Minus,
-  CheckCircle2
+  CheckCircle2,
+  Loader2
 } from 'lucide-react';
 import { db } from '../services/db';
 import { syncClient } from '../services/sync';
 import { playSound } from '../services/audio';
 import { GUILD_THEMES, GuildThemeId, applyTheme, getActiveTheme } from '../services/theme';
-import { enrichMissingCards } from '../services/scryfall';
+import { enrichMissingCards, subscribeEnrichProgress, getCurrentEnrichProgress, EnrichProgressState } from '../services/scryfall';
 
 interface SettingsSyncModalProps {
   isOpen: boolean;
   onClose: () => void;
   syncStatus: 'connected' | 'connecting' | 'disconnected' | 'error';
+}
+
+function calculateResolutionStats() {
+  const instances = db.getAllInstances();
+  const uniqueMap = new Map<string, boolean>();
+
+  for (const inst of instances) {
+    const clean = inst.card_name.trim().toLowerCase();
+    if (!clean) continue;
+    if (!uniqueMap.has(clean)) {
+      const meta = db.getCard(clean) || (inst.oracle_id ? db.getCard(inst.oracle_id) : undefined);
+      const isResolved = !!(meta && meta.is_smart_resolved);
+      uniqueMap.set(clean, isResolved);
+    }
+  }
+
+  const totalUnique = uniqueMap.size;
+  let resolvedCount = 0;
+  for (const isRes of uniqueMap.values()) {
+    if (isRes) resolvedCount++;
+  }
+
+  const percentage = totalUnique > 0 ? Math.round((resolvedCount / totalUnique) * 100) : 0;
+  return { totalUnique, resolvedCount, percentage };
 }
 
 export const SettingsSyncModal: React.FC<SettingsSyncModalProps> = ({
@@ -42,16 +67,22 @@ export const SettingsSyncModal: React.FC<SettingsSyncModalProps> = ({
   const [snapshots, setSnapshots] = useState<Array<{ id: string; timestamp: string; label: string; cardCount: number }>>([]);
   const [unitCount, setUnitCount] = useState<number>(() => db.getUnitCount());
   const [exportFeedback, setExportFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [resolutionStats, setResolutionStats] = useState(() => calculateResolutionStats());
+  const [enrichProgress, setEnrichProgress] = useState<EnrichProgressState>(() => getCurrentEnrichProgress());
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleRefreshMetadata = async () => {
     playSound('click');
     setIsRefreshing(true);
-    setImportStatus('Contacting Scryfall CDN to resolve images & prices...');
+    setImportStatus('Resolving Scryfall CDN images & lowest non-zero market baselines...');
     try {
-      const updated = await enrichMissingCards();
+      const updated = await enrichMissingCards(true);
       playSound('success');
-      setImportStatus(`Successfully updated images & prices for ${updated} cards!`);
+      if (updated === 0) {
+        setImportStatus('All cards in the collection already have verified smart market prices!');
+      } else {
+        setImportStatus(`Successfully updated images & prices for ${updated} cards!`);
+      }
     } catch {
       playSound('error');
       setImportStatus('Failed to refresh some card data. Check internet connection.');
@@ -83,6 +114,23 @@ export const SettingsSyncModal: React.FC<SettingsSyncModalProps> = ({
       setActiveThemeId(getActiveTheme());
       setSnapshots(db.getSnapshots());
       setUnitCount(db.getUnitCount());
+      setResolutionStats(calculateResolutionStats());
+      setEnrichProgress(getCurrentEnrichProgress());
+
+      const unsubDb = db.subscribe(() => {
+        setResolutionStats(calculateResolutionStats());
+        setUnitCount(db.getUnitCount());
+        setSnapshots(db.getSnapshots());
+      });
+
+      const unsubProgress = subscribeEnrichProgress((state) => {
+        setEnrichProgress(state);
+      });
+
+      return () => {
+        unsubDb();
+        unsubProgress();
+      };
     }
   }, [isOpen]);
 
@@ -380,15 +428,96 @@ export const SettingsSyncModal: React.FC<SettingsSyncModalProps> = ({
             </div>
           )}
 
-          {/* Refresh Images & Prices on Demand */}
-          <button
-            onClick={handleRefreshMetadata}
-            disabled={isRefreshing}
-            className="w-full py-2.5 px-3 rounded-xl bg-slate-950 hover:bg-slate-850 text-xs font-mono text-slate-300 hover:text-white border border-slate-800 flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-50"
-          >
-            <Sparkles className={`h-3.5 w-3.5 text-theme-primary ${isRefreshing ? 'animate-spin' : ''}`} />
-            <span>{isRefreshing ? 'Resolving Scryfall CDN images & prices...' : 'Refresh Missing Card Images & Market Prices'}</span>
-          </button>
+          {/* SMART MARKET RESOLUTION & LIVE ENRICHMENT SECTION */}
+          <div className="p-3.5 rounded-2xl bg-slate-950/80 border border-slate-800 space-y-3">
+            {/* Header: Title and Collection Baseline Summary */}
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-theme-primary" />
+                <span className="text-xs font-mono uppercase text-slate-300 font-bold">
+                  SMART MARKET RESOLUTION:
+                </span>
+              </div>
+              <span className="text-[11px] font-mono font-bold text-slate-300">
+                {resolutionStats.resolvedCount.toLocaleString()} / {resolutionStats.totalUnique.toLocaleString()} unique cards ({resolutionStats.percentage}%)
+              </span>
+            </div>
+
+            {/* Loading Bar 1: Static Collection Smart Baseline Progress Bar */}
+            <div className="space-y-1.5">
+              <div className="w-full bg-slate-900 border border-slate-800 rounded-full h-3 overflow-hidden p-0.5">
+                <div 
+                  className={`h-full rounded-full transition-all duration-500 ease-out ${
+                    resolutionStats.percentage === 100 
+                      ? 'bg-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.5)]' 
+                      : 'bg-theme-primary shadow-[0_0_12px_rgba(var(--theme-primary-rgb),0.3)]'
+                  }`}
+                  style={{ width: `${Math.min(100, Math.max(0, resolutionStats.percentage))}%` }}
+                />
+              </div>
+              <div className="flex items-center justify-between text-[10px] text-slate-400 font-mono">
+                <span>
+                  {resolutionStats.percentage === 100 ? (
+                    <span className="text-emerald-400 flex items-center gap-1 font-bold">
+                      <CheckCircle2 className="h-3 w-3 inline text-emerald-400" />
+                      100% of collection matched to lowest paper market prices
+                    </span>
+                  ) : (
+                    <span>
+                      {resolutionStats.totalUnique - resolutionStats.resolvedCount} unique card{resolutionStats.totalUnique - resolutionStats.resolvedCount === 1 ? '' : 's'} pending smart baseline check
+                    </span>
+                  )}
+                </span>
+                <span>Base Target: Non-zero EUR Paper</span>
+              </div>
+            </div>
+
+            {/* Loading Bar 2: Active Live Refresh Progress Bar */}
+            {(isRefreshing || enrichProgress.isActive) && (
+              <div className="p-3 rounded-xl bg-slate-900 border border-theme-primary/40 space-y-2 animate-in fade-in duration-200">
+                <div className="flex items-center justify-between text-xs font-mono">
+                  <span className="text-white flex items-center gap-2 font-bold">
+                    <Loader2 className="h-3.5 w-3.5 text-theme-primary animate-spin" />
+                    <span>Resolving Market Baselines...</span>
+                  </span>
+                  <span className="text-theme-primary font-bold">
+                    {enrichProgress.processed} / {enrichProgress.total} ({enrichProgress.total > 0 ? Math.round((enrichProgress.processed / enrichProgress.total) * 100) : 0}%)
+                  </span>
+                </div>
+
+                <div className="w-full bg-slate-950 rounded-full h-2.5 overflow-hidden border border-slate-800">
+                  <div 
+                    className="h-full rounded-full bg-gradient-to-r from-theme-primary to-theme-accent transition-all duration-150"
+                    style={{ 
+                      width: `${enrichProgress.total > 0 ? Math.min(100, Math.round((enrichProgress.processed / enrichProgress.total) * 100)) : 0}%` 
+                    }}
+                  />
+                </div>
+
+                <div className="text-[10px] text-slate-400 font-mono truncate">
+                  {enrichProgress.currentCard ? (
+                    <span>Processing: <span className="text-slate-200 font-semibold">{enrichProgress.currentCard}</span></span>
+                  ) : (
+                    <span>Fetching lowest paper printings from Scryfall...</span>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Trigger Button */}
+            <button
+              onClick={handleRefreshMetadata}
+              disabled={isRefreshing || enrichProgress.isActive}
+              className="w-full py-2.5 px-3 rounded-xl bg-slate-900 hover:bg-slate-850 text-xs font-mono text-slate-300 hover:text-white border border-slate-800 flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-50"
+            >
+              <Sparkles className={`h-3.5 w-3.5 text-theme-primary ${(isRefreshing || enrichProgress.isActive) ? 'animate-spin' : ''}`} />
+              <span>
+                {(isRefreshing || enrichProgress.isActive)
+                  ? 'Resolving Scryfall CDN images & prices...'
+                  : 'Refresh Missing Card Images & Market Prices'}
+              </span>
+            </button>
+          </div>
 
           <input
             type="file"
