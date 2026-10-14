@@ -78,6 +78,20 @@ export const CustomListView: React.FC<CustomListViewProps> = ({ onNavigateToPick
   const [editingNoteItemId, setEditingNoteItemId] = useState<string | null>(null);
   const [itemNoteValue, setItemNoteValue] = useState('');
 
+  // Card action menu state & submenu
+  const [cardMenuOpenId, setCardMenuOpenId] = useState<string | null>(null);
+  const [listSubmenuOpenId, setListSubmenuOpenId] = useState<string | null>(null);
+
+  // Close open card dropdown menu when clicking anywhere outside
+  useEffect(() => {
+    const handleClickOutside = () => {
+      setCardMenuOpenId(null);
+      setListSubmenuOpenId(null);
+    };
+    window.addEventListener('click', handleClickOutside);
+    return () => window.removeEventListener('click', handleClickOutside);
+  }, []);
+
   // Toast feedback
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'info' | 'error' } | null>(null);
   const toastTimeoutRef = useRef<any>(null);
@@ -300,6 +314,28 @@ export const CustomListView: React.FC<CustomListViewProps> = ({ onNavigateToPick
     triggerHaptic('light');
     db.removeCardFromCustomList(activeList.id, item.id);
     showToast(`Removed "${item.card_name}" from ${activeList.name}`, 'info');
+  };
+
+  // Add card from current list to another custom list
+  const handleAddCardToList = (cardName: string, targetListId: string, targetListName: string, metadata?: ScryfallCard) => {
+    playSound('success');
+    triggerHaptic('light');
+    db.addCardToCustomList(targetListId, cardName, 1, metadata);
+    setCardMenuOpenId(null);
+    setListSubmenuOpenId(null);
+    showToast(`Added "${cardName}" to ${targetListName}`, 'success');
+  };
+
+  // Quick create a new list and add this card to it
+  const handleQuickCreateListAndAdd = (cardName: string, metadata?: ScryfallCard) => {
+    const name = window.prompt('Enter new custom list name (e.g. EDH Wishlist, Binder):');
+    if (!name || !name.trim()) return;
+    playSound('click');
+    const newList = db.createCustomList(name.trim());
+    db.addCardToCustomList(newList.id, cardName, 1, metadata);
+    setCardMenuOpenId(null);
+    setListSubmenuOpenId(null);
+    showToast(`Created "${newList.name}" & added "${cardName}"`, 'success');
   };
 
   // Handle Save Note
@@ -791,20 +827,92 @@ export const CustomListView: React.FC<CustomListViewProps> = ({ onNavigateToPick
             return (
               <div 
                 key={item.id}
-                className="group relative bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-lg hover:border-slate-700 transition flex flex-col justify-between"
+                className={`group relative bg-slate-900 border border-slate-800 rounded-xl shadow-lg hover:border-slate-700 transition flex flex-col justify-between ${
+                  cardMenuOpenId === item.id ? 'z-30 overflow-visible' : 'z-0 overflow-hidden'
+                }`}
               >
                 {/* Card Artwork / Image */}
-                <div className="relative aspect-[5/7] w-full bg-slate-950 overflow-hidden">
-                  <img
-                    src={meta?.image_url_normal || CARD_BACK_IMAGE}
-                    alt={item.card_name}
-                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                    loading="lazy"
-                  />
+                <div className="relative aspect-[5/7] w-full bg-slate-950 rounded-t-xl">
+                  <div className="w-full h-full overflow-hidden rounded-t-xl">
+                    <img
+                      src={meta?.image_url_normal || CARD_BACK_IMAGE}
+                      alt={item.card_name}
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                      loading="lazy"
+                    />
+                  </div>
 
-                  {/* Quantity Badge (Top-Right) */}
-                  <div className="absolute top-2 right-2 bg-slate-950/90 border border-slate-700/80 rounded-lg px-2 py-0.5 shadow-lg">
-                    <span className="text-xs font-black font-mono text-theme-accent">×{item.count}</span>
+                  {/* Top-Left `+` Menu Button */}
+                  <div className={`absolute top-1.5 left-1.5 ${cardMenuOpenId === item.id ? 'z-30' : 'z-10'}`}>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (cardMenuOpenId === item.id) {
+                          setCardMenuOpenId(null);
+                          setListSubmenuOpenId(null);
+                        } else {
+                          setCardMenuOpenId(item.id);
+                          setListSubmenuOpenId(item.id);
+                        }
+                      }}
+                      className={`h-6 w-6 rounded-full flex items-center justify-center transition shadow-lg cursor-pointer ${
+                        cardMenuOpenId === item.id
+                          ? 'bg-theme-accent text-slate-950 font-black ring-2 ring-theme-accent/60'
+                          : 'bg-slate-950/85 hover:bg-slate-900 text-white border border-slate-700/80 hover:border-theme-accent'
+                      }`}
+                      title="Card options"
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                    </button>
+
+                    {cardMenuOpenId === item.id && (
+                      <div 
+                        onClick={(e) => e.stopPropagation()} 
+                        className="absolute left-0 top-7 w-52 sm:w-56 bg-slate-900/98 border border-slate-700 rounded-xl shadow-2xl p-1.5 z-50 space-y-1 text-xs backdrop-blur-md animate-in fade-in text-left"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => setListSubmenuOpenId(listSubmenuOpenId === item.id ? null : item.id)}
+                          className="w-full px-2.5 py-1.5 rounded-lg text-left flex items-center justify-between hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
+                        >
+                          <span className="flex items-center gap-1.5">
+                            <Bookmark className="h-3.5 w-3.5 text-theme-accent" />
+                            <span>Add to List...</span>
+                          </span>
+                          <ChevronRight className={`h-3 w-3 text-slate-400 transition-transform ${listSubmenuOpenId === item.id ? 'rotate-90' : ''}`} />
+                        </button>
+
+                        {listSubmenuOpenId === item.id && (
+                          <div className="p-1 space-y-1 bg-slate-950/70 rounded-lg border border-slate-800 max-h-48 overflow-y-auto">
+                            {customLists.map(list => {
+                              const isCurrent = list.id === activeList?.id;
+                              return (
+                                <button
+                                  key={list.id}
+                                  type="button"
+                                  onClick={() => handleAddCardToList(item.card_name, list.id, list.name, meta)}
+                                  className="w-full px-2 py-1 rounded text-left flex items-center justify-between hover:bg-slate-800 text-slate-300 hover:text-white transition cursor-pointer text-[11px]"
+                                >
+                                  <span className="truncate max-w-[130px]">
+                                    {list.name} {isCurrent && <span className="text-[9px] text-slate-500">(current)</span>}
+                                  </span>
+                                  <span className="text-[9px] font-mono text-slate-500">{list.items.reduce((acc, i) => acc + i.count, 0)}</span>
+                                </button>
+                              );
+                            })}
+                            <button
+                              type="button"
+                              onClick={() => handleQuickCreateListAndAdd(item.card_name, meta)}
+                              className="w-full px-2 py-1 rounded text-left flex items-center gap-1 text-theme-accent hover:brightness-110 hover:bg-slate-800 transition cursor-pointer text-[11px] font-semibold"
+                            >
+                              <Plus className="h-3 w-3" />
+                              <span>+ New List</span>
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
 
                   {/* Price Tag (Bottom-Right) */}
@@ -916,8 +1024,8 @@ export const CustomListView: React.FC<CustomListViewProps> = ({ onNavigateToPick
         </div>
       ) : (
         /* Detailed Table View */
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
-          <div className="overflow-x-auto">
+        <div className={`bg-slate-900 border border-slate-800 rounded-2xl shadow-xl ${cardMenuOpenId?.startsWith('table-') ? 'overflow-visible' : 'overflow-hidden'}`}>
+          <div className={cardMenuOpenId?.startsWith('table-') ? 'overflow-visible' : 'overflow-x-auto'}>
             <table className="w-full text-left text-xs text-slate-200">
               <thead className="bg-slate-950 text-[10px] font-mono text-slate-400 uppercase tracking-wider border-b border-slate-800">
                 <tr>
@@ -937,7 +1045,7 @@ export const CustomListView: React.FC<CustomListViewProps> = ({ onNavigateToPick
                   const isEditingNote = editingNoteItemId === item.id;
 
                   return (
-                    <tr key={item.id} className="hover:bg-slate-800/40 transition">
+                    <tr key={item.id} className={`hover:bg-slate-800/40 transition relative ${cardMenuOpenId === `table-${item.id}` ? 'z-30' : 'z-0'}`}>
                       {/* Card Thumbnail & Name */}
                       <td className="py-2.5 px-3">
                         <div className="flex items-center gap-2.5">
@@ -1039,16 +1147,80 @@ export const CustomListView: React.FC<CustomListViewProps> = ({ onNavigateToPick
                         </div>
                       </td>
 
-                      {/* Remove */}
+                      {/* Actions */}
                       <td className="py-2.5 px-3 text-right">
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveItem(item)}
-                          className="p-1.5 text-slate-500 hover:text-rose-400 hover:bg-slate-800 rounded-lg transition cursor-pointer"
-                          title="Remove item"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
+                        <div className="flex items-center justify-end gap-1 relative">
+                          <div className={`relative ${cardMenuOpenId === `table-${item.id}` ? 'z-40' : ''}`}>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (cardMenuOpenId === `table-${item.id}`) {
+                                  setCardMenuOpenId(null);
+                                  setListSubmenuOpenId(null);
+                                } else {
+                                  setCardMenuOpenId(`table-${item.id}`);
+                                  setListSubmenuOpenId(`table-${item.id}`);
+                                }
+                              }}
+                              className={`p-1.5 rounded-lg transition border cursor-pointer ${
+                                cardMenuOpenId === `table-${item.id}`
+                                  ? 'bg-theme-accent text-slate-950 border-theme-accent'
+                                  : 'text-slate-400 hover:text-white bg-slate-900 border-slate-700/80 hover:bg-slate-800'
+                              }`}
+                              title="Add to another list"
+                            >
+                              <Plus className="h-3.5 w-3.5" />
+                            </button>
+
+                            {cardMenuOpenId === `table-${item.id}` && (
+                              <div
+                                onClick={(e) => e.stopPropagation()}
+                                className="absolute right-0 top-8 w-52 sm:w-56 bg-slate-900/98 border border-slate-700 rounded-xl shadow-2xl p-1.5 z-50 space-y-1 text-xs backdrop-blur-md animate-in fade-in text-left"
+                              >
+                                <div className="text-[10px] text-slate-400 font-mono px-2 py-0.5 font-bold uppercase tracking-wider flex items-center justify-between">
+                                  <span>Add to List</span>
+                                  <Bookmark className="h-3 w-3 text-theme-accent" />
+                                </div>
+                                <div className="p-1 space-y-1 bg-slate-950/70 rounded-lg border border-slate-800 max-h-48 overflow-y-auto">
+                                  {customLists.map(list => {
+                                    const isCurrent = list.id === activeList?.id;
+                                    return (
+                                      <button
+                                        key={list.id}
+                                        type="button"
+                                        onClick={() => handleAddCardToList(item.card_name, list.id, list.name, meta)}
+                                        className="w-full px-2 py-1 rounded text-left flex items-center justify-between hover:bg-slate-800 text-slate-300 hover:text-white transition cursor-pointer text-[11px]"
+                                      >
+                                        <span className="truncate max-w-[130px]">
+                                          {list.name} {isCurrent && <span className="text-[9px] text-slate-500">(current)</span>}
+                                        </span>
+                                        <span className="text-[9px] font-mono text-slate-500">{list.items.reduce((acc, i) => acc + i.count, 0)}</span>
+                                      </button>
+                                    );
+                                  })}
+                                  <button
+                                    type="button"
+                                    onClick={() => handleQuickCreateListAndAdd(item.card_name, meta)}
+                                    className="w-full px-2 py-1 rounded text-left flex items-center gap-1 text-theme-accent hover:brightness-110 hover:bg-slate-800 transition cursor-pointer text-[11px] font-semibold"
+                                  >
+                                    <Plus className="h-3 w-3" />
+                                    <span>+ New List</span>
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveItem(item)}
+                            className="p-1.5 text-slate-500 hover:text-rose-400 hover:bg-slate-800 rounded-lg transition cursor-pointer"
+                            title="Remove item"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
