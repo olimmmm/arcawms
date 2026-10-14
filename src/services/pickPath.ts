@@ -179,9 +179,11 @@ export function cleanCardLine(rawLine: string): ParsedDecklistLine | null {
 }
 
 /**
- * Parses pasted decklist or wants list while preserving encounter order
+ * Parses pasted decklist or wants list while preserving encounter order.
+ * By default, merges only consecutive duplicate lines so that physical/chronological
+ * card order in batches is strictly preserved unless cards are listed consecutively.
  */
-export function parseDecklistText(rawText: string): ParsedDecklistLine[] {
+export function parseDecklistText(rawText: string, mergeAllDuplicates = false): ParsedDecklistLine[] {
   const lines = rawText.split(/\r?\n/);
   const items: ParsedDecklistLine[] = [];
 
@@ -189,12 +191,29 @@ export function parseDecklistText(rawText: string): ParsedDecklistLine[] {
     const cleaned = cleanCardLine(rawLine);
     if (!cleaned) continue;
 
-    const key = `${cleaned.name.toLowerCase()}|${cleaned.set || ''}`;
-    const existingIndex = items.findIndex(i => `${i.name.toLowerCase()}|${i.set || ''}` === key);
-    if (existingIndex >= 0) {
-      items[existingIndex].count += cleaned.count;
+    if (mergeAllDuplicates) {
+      const key = `${cleaned.name.toLowerCase()}|${cleaned.set || ''}|${cleaned.collector_number || ''}`;
+      const existingIndex = items.findIndex(
+        i => `${i.name.toLowerCase()}|${i.set || ''}|${i.collector_number || ''}` === key
+      );
+      if (existingIndex >= 0) {
+        items[existingIndex].count += cleaned.count;
+      } else {
+        items.push({ ...cleaned });
+      }
     } else {
-      items.push({ ...cleaned });
+      const last = items.length > 0 ? items[items.length - 1] : null;
+      const isConsecutive =
+        last &&
+        last.name.toLowerCase() === cleaned.name.toLowerCase() &&
+        (last.set || '').toLowerCase() === (cleaned.set || '').toLowerCase() &&
+        (last.collector_number || '').toLowerCase() === (cleaned.collector_number || '').toLowerCase();
+
+      if (isConsecutive) {
+        last.count += cleaned.count;
+      } else {
+        items.push({ ...cleaned });
+      }
     }
   }
 
