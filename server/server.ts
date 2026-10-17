@@ -5,6 +5,7 @@ import cors from 'cors';
 import os from 'os';
 import fs from 'fs';
 import path from 'path';
+import { gistStore } from './gistStore';
 
 const PORT = process.env.PORT || 3001;
 const app = express();
@@ -25,15 +26,43 @@ if (!fs.existsSync(DATA_DIR)) {
 
 let currentStore: any = null;
 let saveDebounceTimer: any = null;
+let gistSaveDebounceTimer: any = null;
 
-function loadStore() {
+async function loadStore() {
   try {
     if (fs.existsSync(DATA_FILE)) {
       const raw = fs.readFileSync(DATA_FILE, 'utf-8');
       currentStore = JSON.parse(raw);
     }
   } catch (err) {
-    console.warn('Could not load store file:', err);
+    console.warn('Could not load local store file:', err);
+  }
+
+  // If GitHub Gist storage is configured, reconcile with cloud snapshot on boot
+  if (gistStore.isConfigured()) {
+    try {
+      const remoteData = await gistStore.load();
+      if (remoteData) {
+        const localTs = currentStore?.timestamp || currentStore?.last_updated || 0;
+        const remoteTs = remoteData.timestamp || remoteData.last_updated || 0;
+
+        if (remoteTs >= localTs || !currentStore) {
+          currentStore = remoteData;
+          try {
+            fs.writeFileSync(DATA_FILE, JSON.stringify(currentStore, null, 2), 'utf-8');
+            console.log(`[SyncServer] Restored store from GitHub Gist (ts: ${remoteTs})`);
+          } catch {}
+        } else if (localTs > remoteTs) {
+          console.log(`[SyncServer] Local store is newer than Gist (local: ${localTs} > remote: ${remoteTs}). Updating Gist...`);
+          gistStore.save(currentStore);
+        }
+      } else if (currentStore) {
+        console.log('[GistStore] Gist was newly created. Seeding with current local store...');
+        gistStore.save(currentStore);
+      }
+    } catch (err) {
+      console.warn('[SyncServer] Error reconciling with Gist on boot:', err);
+    }
   }
 }
 
@@ -47,6 +76,14 @@ function saveStore(data: any) {
       console.error('[SyncServer] Failed to write store file:', err);
     }
   }, 100);
+
+  // Debounce Gist persistence (1500ms) to bundle rapid changes and avoid rate-limiting
+  if (gistStore.isConfigured()) {
+    if (gistSaveDebounceTimer) clearTimeout(gistSaveDebounceTimer);
+    gistSaveDebounceTimer = setTimeout(() => {
+      gistStore.save(data);
+    }, 1500);
+  }
 }
 
 function flushStoreSync() {
@@ -57,6 +94,10 @@ function flushStoreSync() {
       console.log('[SyncServer] Flushed store to disk before shutdown.');
     } catch (err) {
       console.error('[SyncServer] Flush failed:', err);
+    }
+
+    if (gistStore.isConfigured()) {
+      gistStore.save(currentStore);
     }
   }
 }
@@ -73,7 +114,20 @@ app.get('/api/health', (req, res) => {
     status: 'ok',
     version: '1.1.0',
     clients: wss.clients.size,
-    hasStore: !!currentStore
+    hasStore: !!currentStore,
+    cloudPersistence: {
+      type: gistStore.isConfigured() ? 'github_gist' : 'local_only',
+      configured: gistStore.isConfigured(),
+      gistId: gistStore.getGistId()
+    }
+  });
+});
+
+app.get('/api/sync/cloud-status', (req, res) => {
+  res.json({
+    type: gistStore.isConfigured() ? 'github_gist' : 'local_only',
+    configured: gistStore.isConfigured(),
+    gistId: gistStore.getGistId()
   });
 });
 

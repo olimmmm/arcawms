@@ -69,7 +69,17 @@ export const SettingsSyncModal: React.FC<SettingsSyncModalProps> = ({
   const [exportFeedback, setExportFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [resolutionStats, setResolutionStats] = useState(() => calculateResolutionStats());
   const [enrichProgress, setEnrichProgress] = useState<EnrichProgressState>(() => getCurrentEnrichProgress());
+  const [cloudStatus, setCloudStatus] = useState<{ configured: boolean; gistId: string | null } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (isOpen) {
+      fetch('/api/sync/cloud-status')
+        .then(r => r.json())
+        .then(data => setCloudStatus(data))
+        .catch(() => setCloudStatus(null));
+    }
+  }, [isOpen]);
 
   const handleRefreshMetadata = async () => {
     playSound('click');
@@ -595,6 +605,31 @@ export const SettingsSyncModal: React.FC<SettingsSyncModalProps> = ({
             </p>
             <p className="text-[11px] text-slate-500">
               Pulls and pushes inventory instantly over WebSockets. If offline, changes queue and sync upon reconnecting.
+            </p>
+          </div>
+
+          {/* Cloud Persistence Indicator */}
+          <div className="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800 space-y-1">
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-slate-400 font-mono flex items-center gap-1.5">
+                <ShieldCheck className="h-4 w-4 text-theme-primary" />
+                <span>Cloud Bedrock (Persistence):</span>
+              </span>
+              {cloudStatus?.configured ? (
+                <span className="text-emerald-400 font-mono font-bold flex items-center gap-1 text-[11px]">
+                  <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
+                  <span>GitHub Gist Active</span>
+                </span>
+              ) : (
+                <span className="text-amber-400 font-mono text-[11px] flex items-center gap-1">
+                  <span>Local Memory Only</span>
+                </span>
+              )}
+            </div>
+            <p className="text-[10px] text-slate-500">
+              {cloudStatus?.configured 
+                ? `Permanent cloud backup linked to your GitHub account (Gist ${cloudStatus.gistId ? `${cloudStatus.gistId.slice(0, 8)}...` : 'active'}). Database will never reset when server sleeps.`
+                : 'Server resets to local backup when sleeping. To enable permanent 24/7 cloud persistence, set GITHUB_TOKEN in your Render environment variables.'}
             </p>
           </div>
 
