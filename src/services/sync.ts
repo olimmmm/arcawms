@@ -178,37 +178,36 @@ class SyncClient {
 
     console.log(`[SyncClient] Handshake check — Local: ${localCount} cards (ts: ${localTs}) | Remote: ${remoteCount} cards (ts: ${remoteTs})`);
 
-    // Case 1: Fresh device with 0 cards in local storage
+    // Guard 1: Fresh local device with 0 cards -> adopt server collection
     if (localCount === 0 && remoteCount > 0) {
       console.log(`[SyncClient] Fresh local device (0 cards). Importing ${remoteCount} cards from server.`);
       this.applyRemoteStore(remoteStore, remoteTs);
       return;
     }
 
-    // Case 2: Local has more cards than remote! Local must never be wiped by a smaller remote store.
-    if (localCount > remoteCount) {
-      console.log(`[SyncClient] Local has more cards than server (${localCount} > ${remoteCount}). Pushing local state to server.`);
+    // Guard 2: Protection against blank / default seed container wiping an established user collection
+    // If local has an established collection (50+ cards) and remote is empty or default seed data (<= 28 cards),
+    // never wipe local. Instead, seed the server container with the legitimate collection.
+    if (localCount >= 50 && remoteCount <= 28) {
+      console.warn(`[SyncClient] Remote store is an unseeded/cold container (${remoteCount} cards). Protecting local collection (${localCount} cards) and seeding server.`);
       this.pushCurrentState(false);
       return;
     }
 
-    // Case 3: Remote has more cards than local! Remote has new cards from another device.
-    if (remoteCount > localCount) {
-      console.log(`[SyncClient] Remote has more cards than local (${remoteCount} > ${localCount}). Synchronizing from server.`);
-      this.applyRemoteStore(remoteStore, remoteTs);
-      return;
-    }
-
-    // Case 4: Equal card count — resolve by timestamp
+    // Primary Rule: TRUE TIMESTAMP WINS
+    // All legitimate actions (adding cards, removing cards, swapping, moving locations)
+    // update the timestamp. The newer timestamp accurately reflects the latest user intent.
     if (remoteTs > localTs) {
-      console.log(`[SyncClient] Remote timestamp is newer (${remoteTs} > ${localTs}). Synchronizing from server.`);
+      console.log(`[SyncClient] Remote timestamp is newer (${remoteTs} > ${localTs}). Synchronizing from server (${remoteCount} cards).`);
       this.applyRemoteStore(remoteStore, remoteTs);
       return;
     } else if (localTs > remoteTs) {
-      console.log(`[SyncClient] Local timestamp is newer (${localTs} > ${remoteTs}). Passively updating server.`);
+      console.log(`[SyncClient] Local timestamp is newer (${localTs} > ${remoteTs}). Updating server with local state (${localCount} cards).`);
       this.pushCurrentState(false);
       return;
     }
+
+    // Equal timestamps: already in sync!
   }
 
   private applyRemoteStore(remoteStore: any, remoteTs: number) {
@@ -235,13 +234,13 @@ class SyncClient {
     const localCount = db.getAllInstances().length;
     const remoteCount = remotePayload.instances.length;
 
-    // Never wipe out a local collection with more cards
-    if (localCount > remoteCount) {
-      console.log(`[SyncClient] Ignoring broadcast with fewer cards (${remoteCount} vs local ${localCount}).`);
+    // Safety guard against unseeded cold container broadcast
+    if (localCount >= 50 && remoteCount <= 28) {
       return;
     }
 
-    if (remoteTs > localTs && remoteCount > 0) {
+    // True timestamp wins
+    if (remoteTs > localTs) {
       console.log(`[SyncClient] Applying real-time update from client ${senderClientId} (${remoteCount} cards, ts: ${remoteTs}).`);
       this.applyRemoteStore(remotePayload, remoteTs);
     }
