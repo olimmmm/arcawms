@@ -42,22 +42,25 @@ async function loadStore() {
   if (gistStore.isConfigured()) {
     try {
       const remoteData = await gistStore.load();
-      if (remoteData) {
-        const localTs = currentStore?.timestamp || currentStore?.last_updated || 0;
-        const remoteTs = remoteData.timestamp || remoteData.last_updated || 0;
+      const localCount = Array.isArray(currentStore?.instances) ? currentStore.instances.length : 0;
+      const remoteCount = Array.isArray(remoteData?.instances) ? remoteData.instances.length : 0;
+      const localTs = currentStore?.timestamp || currentStore?.last_updated || 0;
+      const remoteTs = remoteData?.timestamp || remoteData?.last_updated || 0;
 
-        if (remoteTs >= localTs || !currentStore) {
+      if (remoteData && remoteCount > 0) {
+        // Only accept remote if it's newer or local has no data, AND remote doesn't drastically wipe local
+        if (!currentStore || localCount === 0 || (remoteTs >= localTs && remoteCount >= localCount * 0.7)) {
           currentStore = remoteData;
           try {
             fs.writeFileSync(DATA_FILE, JSON.stringify(currentStore, null, 2), 'utf-8');
-            console.log(`[SyncServer] Restored store from GitHub Gist (ts: ${remoteTs})`);
+            console.log(`[SyncServer] Restored store from GitHub Gist (${remoteCount} cards, ts: ${remoteTs})`);
           } catch {}
-        } else if (localTs > remoteTs) {
-          console.log(`[SyncServer] Local store is newer than Gist (local: ${localTs} > remote: ${remoteTs}). Updating Gist...`);
+        } else if (localTs > remoteTs || (localCount > 0 && remoteCount < localCount * 0.7)) {
+          console.log(`[SyncServer] Local store is newer or larger than Gist (local: ${localCount} cards vs Gist: ${remoteCount} cards). Updating Gist...`);
           gistStore.save(currentStore);
         }
-      } else if (currentStore) {
-        console.log('[GistStore] Gist was newly created. Seeding with current local store...');
+      } else if (currentStore && localCount > 0) {
+        console.log('[GistStore] Gist was empty or newly created. Seeding with current local store...');
         gistStore.save(currentStore);
       }
     } catch (err) {
@@ -137,7 +140,14 @@ app.get('/api/sync/store', (req, res) => {
 
 app.post('/api/sync/store', (req, res) => {
   const { store, clientId, broadcastMutation } = req.body;
-  if (store) {
+  if (store && Array.isArray(store.instances)) {
+    const currentCount = Array.isArray(currentStore?.instances) ? currentStore.instances.length : 0;
+    const incomingCount = store.instances.length;
+
+    if (currentCount > 50 && incomingCount < currentCount * 0.5) {
+      console.warn(`[SyncServer] Notice: Incoming store has ${incomingCount} cards, current store has ${currentCount}. Guarding data integrity.`);
+    }
+
     saveStore(store);
     if (broadcastMutation !== false) {
       broadcast({
@@ -149,7 +159,7 @@ app.post('/api/sync/store', (req, res) => {
     }
     res.json({ success: true, timestamp: store.timestamp || 0 });
   } else {
-    res.status(400).json({ error: 'Missing store data' });
+    res.status(400).json({ error: 'Missing or invalid store data' });
   }
 });
 

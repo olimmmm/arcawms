@@ -72,6 +72,7 @@ class SyncClient {
 
   private async checkServerStoreHttp() {
     try {
+      await db.whenHydrated();
       const res = await fetch('/api/sync/store');
       if (res.ok) {
         const data = await res.json();
@@ -128,10 +129,14 @@ class SyncClient {
 
           if (msg.type === 'SYNC_FULL_STATE') {
             // Passive handshake on WS connect
-            this.reconcileWithServer(msg.payload);
+            db.whenHydrated().then(() => {
+              this.reconcileWithServer(msg.payload);
+            });
           } else if (msg.type === 'STATE_UPDATE') {
             // Live broadcast mutation from another active client
-            this.handleLiveBroadcast(msg.payload, msg.clientId);
+            db.whenHydrated().then(() => {
+              this.handleLiveBroadcast(msg.payload, msg.clientId);
+            });
           }
         } catch (e) {
           console.error('[ArcaSync] Error reading remote msg:', e);
@@ -172,6 +177,13 @@ class SyncClient {
     const remoteTs = parseTimestamp(remoteStore.timestamp || remoteStore.last_updated);
 
     console.log(`[SyncClient] Handshake check — Local: ${localCount} cards (ts: ${localTs}) | Remote: ${remoteCount} cards (ts: ${remoteTs})`);
+
+    // Safety check: Prevent remote store with significantly fewer cards from wiping an established collection!
+    if (localCount > 50 && remoteCount < localCount * 0.7) {
+      console.warn(`[SyncClient] Refusing to overwrite local collection (${localCount} cards) with smaller remote store (${remoteCount} cards). Pushing local state to server to heal.`);
+      this.pushCurrentState(false);
+      return;
+    }
 
     // Case 1: Server has newer changes from another device!
     // (e.g. laptop added cards at 16:00, phone is connecting with stale 11:57 state)
@@ -289,7 +301,7 @@ class SyncClient {
       } catch {}
     }
 
-    // 3. Reliable HTTP POST fallback with keepalive: true
+    // 3. Reliable HTTP POST fallback (no keepalive: true to prevent 64KB Fetch limit rejection on large collections)
     try {
       const body = JSON.stringify({ 
         store: payload, 
@@ -299,8 +311,7 @@ class SyncClient {
       fetch('/api/sync/store', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body,
-        keepalive: true
+        body
       }).catch(err => {
         console.debug('[SyncClient] HTTP push notice:', err);
       });

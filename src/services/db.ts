@@ -1,5 +1,6 @@
 import { ActivityLogItem, CardInstance, InventoryStats, ScryfallCard, CustomList, CustomListItem } from '../types';
 import { parseLocationId } from './pickPath';
+import { idbGet, idbSet } from './idb';
 
 const STORAGE_KEY_INSTANCES = 'arcawms_instances_v2';
 const STORAGE_KEY_CARDS = 'arcawms_cards_v2';
@@ -348,12 +349,19 @@ class ArcaDatabase {
   private instancesByName: Map<string, Set<string>> = new Map();
   private customLists: Map<string, CustomList> = new Map();
   private history: ActivityLogItem[] = [];
+  private snapshots: any[] = [];
   private listeners: Set<() => void> = new Set();
   private initialized = false;
   private lastUpdated: number = 0;
+  private hydrationPromise: Promise<void>;
 
   constructor() {
     this.init();
+    this.hydrationPromise = this.hydrateFromIndexedDB();
+  }
+
+  public whenHydrated(): Promise<void> {
+    return this.hydrationPromise;
   }
 
   private updateCardNameIndex(card: ScryfallCard) {
@@ -525,7 +533,104 @@ class ArcaDatabase {
       this.touchUpdated();
     }
 
+    try {
+      const rawSnaps = localStorage.getItem('arcawms_snapshots_v1');
+      if (rawSnaps) {
+        const parsed = JSON.parse(rawSnaps);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          this.snapshots = parsed;
+        }
+      }
+    } catch {}
+
     this.initialized = true;
+  }
+
+  private async hydrateFromIndexedDB(): Promise<void> {
+    try {
+      const [idbTs, idbInst, idbCards, idbLists, idbHist, idbSnaps] = await Promise.all([
+        idbGet<number>(STORAGE_KEY_LAST_UPDATED),
+        idbGet<CardInstance[]>(STORAGE_KEY_INSTANCES),
+        idbGet<ScryfallCard[]>(STORAGE_KEY_CARDS),
+        idbGet<CustomList[]>(STORAGE_KEY_CUSTOM_LISTS),
+        idbGet<ActivityLogItem[]>(STORAGE_KEY_HISTORY),
+        idbGet<any[]>('arcawms_snapshots_v1')
+      ]);
+
+      let hasHydrated = false;
+
+      // 1. Instances: hydrate if IDB has cards and IDB has at least as many as memory or is newer
+      if (Array.isArray(idbInst) && idbInst.length > 0) {
+        if (idbInst.length >= this.instances.size || (idbTs && idbTs >= this.lastUpdated)) {
+          this.instances.clear();
+          idbInst.forEach(inst => this.instances.set(inst.instance_id, inst));
+          hasHydrated = true;
+        }
+      }
+
+      // 2. Cards dictionary: hydrate if IDB has cards
+      if (Array.isArray(idbCards) && idbCards.length > 0) {
+        if (idbCards.length >= this.cards.size) {
+          this.cards.clear();
+          idbCards.forEach(c => this.cards.set(c.oracle_id, c));
+          hasHydrated = true;
+        }
+      }
+
+      // 3. Custom lists
+      if (Array.isArray(idbLists) && idbLists.length > 0) {
+        this.customLists.clear();
+        idbLists.forEach(l => this.customLists.set(l.id, l));
+        hasHydrated = true;
+      }
+
+      // 4. Activity history
+      if (Array.isArray(idbHist) && idbHist.length > 0) {
+        this.history = idbHist;
+      }
+
+      // 5. Snapshots
+      if (Array.isArray(idbSnaps) && idbSnaps.length > 0) {
+        this.snapshots = idbSnaps;
+      } else if (this.snapshots.length > 0) {
+        idbSet('arcawms_snapshots_v1', this.snapshots);
+      }
+
+      // 6. Timestamp
+      if (typeof idbTs === 'number' && idbTs > this.lastUpdated) {
+        this.lastUpdated = idbTs;
+      }
+
+      // If IDB was empty or incomplete, persist current in-memory state to IDB as initial migration
+      if (!idbInst || idbInst.length === 0) {
+        if (this.instances.size > 0) {
+          idbSet(STORAGE_KEY_INSTANCES, Array.from(this.instances.values()));
+        }
+        if (this.cards.size > 0) {
+          idbSet(STORAGE_KEY_CARDS, Array.from(this.cards.values()));
+        }
+        if (this.customLists.size > 0) {
+          idbSet(STORAGE_KEY_CUSTOM_LISTS, Array.from(this.customLists.values()));
+        }
+        if (this.history.length > 0) {
+          idbSet(STORAGE_KEY_HISTORY, this.history);
+        }
+        idbSet(STORAGE_KEY_LAST_UPDATED, this.lastUpdated);
+      }
+
+      // Always free localStorage snapshot quota
+      try {
+        localStorage.removeItem('arcawms_snapshots_v1');
+      } catch {}
+
+      if (hasHydrated) {
+        this.rebuildIndexes();
+        this.healAndDeduplicateCards();
+        this.notify();
+      }
+    } catch (err) {
+      console.warn('[ArcaDB] Error hydrating from IndexedDB:', err);
+    }
   }
 
   public getLastUpdated(): number {
@@ -533,6 +638,7 @@ class ArcaDatabase {
   }
 
   public hasLocalStoredInstances(): boolean {
+    if (this.instances.size > 0) return true;
     try {
       const stored = localStorage.getItem(STORAGE_KEY_INSTANCES);
       return stored !== null && stored !== '[]';
@@ -544,36 +650,43 @@ class ArcaDatabase {
   private safeSetItem(key: string, value: string): void {
     try {
       localStorage.setItem(key, value);
-    } catch (e) {
-      console.warn(`[ArcaDB] Quota warning on ${key}. Pruning snapshots to reclaim space.`);
+    } catch {
+      // localStorage 5MB quota exceeded - completely normal and expected for large MTG collections.
+      // Data is safely persisted in IndexedDB.
       try {
         localStorage.removeItem('arcawms_snapshots_v1');
-        localStorage.setItem(key, value);
-      } catch (err) {
-        console.error(`[ArcaDB] Critical: failed to write ${key} to localStorage:`, err);
-      }
+      } catch {}
     }
   }
 
   private touchUpdated(ts?: number) {
     this.lastUpdated = (typeof ts === 'number' && ts > 0) ? ts : Date.now();
+    idbSet(STORAGE_KEY_LAST_UPDATED, this.lastUpdated);
     this.safeSetItem(STORAGE_KEY_LAST_UPDATED, String(this.lastUpdated));
   }
 
   private saveInstances() {
-    this.safeSetItem(STORAGE_KEY_INSTANCES, JSON.stringify(Array.from(this.instances.values())));
+    const list = Array.from(this.instances.values());
+    idbSet(STORAGE_KEY_INSTANCES, list);
+    this.safeSetItem(STORAGE_KEY_INSTANCES, JSON.stringify(list));
   }
 
   private saveCards() {
-    this.safeSetItem(STORAGE_KEY_CARDS, JSON.stringify(Array.from(this.cards.values())));
+    const list = Array.from(this.cards.values());
+    idbSet(STORAGE_KEY_CARDS, list);
+    this.safeSetItem(STORAGE_KEY_CARDS, JSON.stringify(list));
   }
 
   private saveHistory() {
-    this.safeSetItem(STORAGE_KEY_HISTORY, JSON.stringify(this.history.slice(0, 100)));
+    const slice = this.history.slice(0, 100);
+    idbSet(STORAGE_KEY_HISTORY, slice);
+    this.safeSetItem(STORAGE_KEY_HISTORY, JSON.stringify(slice));
   }
 
   private saveCustomLists() {
-    this.safeSetItem(STORAGE_KEY_CUSTOM_LISTS, JSON.stringify(Array.from(this.customLists.values())));
+    const list = Array.from(this.customLists.values());
+    idbSet(STORAGE_KEY_CUSTOM_LISTS, list);
+    this.safeSetItem(STORAGE_KEY_CUSTOM_LISTS, JSON.stringify(list));
   }
 
   // === CUSTOM LISTS CRUD & ITEM MANAGEMENT ===
@@ -1793,35 +1906,28 @@ class ArcaDatabase {
   }
 
   public getSnapshots(): Array<{ id: string; timestamp: string; label: string; cardCount: number }> {
-    try {
-      const raw = localStorage.getItem('arcawms_snapshots_v1');
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        return parsed.map((s: any) => ({
-          id: s.id,
-          timestamp: s.timestamp,
-          label: s.label,
-          cardCount: s.cardCount
-        }));
-      }
-    } catch {}
-    return [];
+    return this.snapshots.map((s: any) => ({
+      id: s.id,
+      timestamp: s.timestamp,
+      label: s.label,
+      cardCount: s.cardCount
+    }));
   }
 
   public saveSnapshot(label = 'Collection Snapshot'): void {
     try {
-      const raw = localStorage.getItem('arcawms_snapshots_v1');
-      const existing = raw ? JSON.parse(raw) : [];
       const newSnap = {
         id: generateUUID(),
         timestamp: new Date().toISOString(),
         label,
         cardCount: this.instances.size,
         instances: Array.from(this.instances.values())
-        // Omit full cards array to prevent localStorage quota exhaustion on mobile
       };
-      const updated = [newSnap, ...existing].slice(0, 3);
-      this.safeSetItem('arcawms_snapshots_v1', JSON.stringify(updated));
+      this.snapshots = [newSnap, ...this.snapshots].slice(0, 5);
+      idbSet('arcawms_snapshots_v1', this.snapshots);
+      try {
+        localStorage.removeItem('arcawms_snapshots_v1');
+      } catch {}
     } catch (e) {
       console.warn('Failed to save snapshot:', e);
     }
@@ -1829,10 +1935,7 @@ class ArcaDatabase {
 
   public restoreSnapshot(snapshotId: string): boolean {
     try {
-      const raw = localStorage.getItem('arcawms_snapshots_v1');
-      if (!raw) return false;
-      const snaps = JSON.parse(raw);
-      const snap = snaps.find((s: any) => s.id === snapshotId);
+      const snap = this.snapshots.find((s: any) => s.id === snapshotId);
       if (!snap) return false;
 
       this.instances.clear();
