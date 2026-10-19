@@ -1,5 +1,5 @@
 import { ActivityLogItem, CardInstance, InventoryStats, ScryfallCard, CustomList, CustomListItem } from '../types';
-import { parseLocationId } from './pickPath';
+import { parseLocationId, normalizeCardName, getFrontFaceName } from './pickPath';
 import { idbGet, idbSet } from './idb';
 
 const STORAGE_KEY_INSTANCES = 'arcawms_instances_v2';
@@ -365,49 +365,70 @@ class ArcaDatabase {
   }
 
   private updateCardNameIndex(card: ScryfallCard) {
-    const key = card.name.trim().toLowerCase();
-    const existing = this.cardsByName.get(key);
-    if (!existing) {
-      this.cardsByName.set(key, card);
-      return;
-    }
+    const rawKey = card.name.trim().toLowerCase();
+    const normKey = normalizeCardName(card.name);
+    const frontKey = getFrontFaceName(card.name).toLowerCase();
 
-    // 1. Prioritize smart-resolved cards over un-resolved cards
-    if (!existing.is_smart_resolved && card.is_smart_resolved) {
-      this.cardsByName.set(key, card);
-      return;
-    }
-    if (existing.is_smart_resolved && !card.is_smart_resolved) {
-      return;
-    }
+    const keys = Array.from(new Set([rawKey, normKey, frontKey]));
+    for (const key of keys) {
+      if (!key) continue;
+      const existing = this.cardsByName.get(key);
+      if (!existing) {
+        this.cardsByName.set(key, card);
+        continue;
+      }
 
-    // 2. Prioritize cards with valid non-zero prices
-    const existingHasPrice = existing.price_eur > 0;
-    const newHasPrice = card.price_eur > 0;
-    if (!existingHasPrice && newHasPrice) {
-      this.cardsByName.set(key, card);
-    } else if (existingHasPrice && newHasPrice && card.price_eur < existing.price_eur) {
-      this.cardsByName.set(key, card);
+      // 1. Prioritize smart-resolved cards over un-resolved cards
+      if (!existing.is_smart_resolved && card.is_smart_resolved) {
+        this.cardsByName.set(key, card);
+        continue;
+      }
+      if (existing.is_smart_resolved && !card.is_smart_resolved) {
+        continue;
+      }
+
+      // 2. Prioritize cards with valid non-zero prices
+      const existingHasPrice = existing.price_eur > 0;
+      const newHasPrice = card.price_eur > 0;
+      if (!existingHasPrice && newHasPrice) {
+        this.cardsByName.set(key, card);
+      } else if (existingHasPrice && newHasPrice && card.price_eur < existing.price_eur) {
+        this.cardsByName.set(key, card);
+      }
     }
   }
 
   private addInstanceToNameIndex(inst: CardInstance) {
-    const key = inst.card_name.trim().toLowerCase();
-    let set = this.instancesByName.get(key);
-    if (!set) {
-      set = new Set<string>();
-      this.instancesByName.set(key, set);
+    const rawKey = inst.card_name.trim().toLowerCase();
+    const normKey = normalizeCardName(inst.card_name);
+    const frontKey = getFrontFaceName(inst.card_name).toLowerCase();
+
+    const keys = new Set([rawKey, normKey, frontKey]);
+    for (const key of keys) {
+      if (!key) continue;
+      let set = this.instancesByName.get(key);
+      if (!set) {
+        set = new Set<string>();
+        this.instancesByName.set(key, set);
+      }
+      set.add(inst.instance_id);
     }
-    set.add(inst.instance_id);
   }
 
   private removeInstanceFromNameIndex(inst: CardInstance) {
-    const key = inst.card_name.trim().toLowerCase();
-    const set = this.instancesByName.get(key);
-    if (set) {
-      set.delete(inst.instance_id);
-      if (set.size === 0) {
-        this.instancesByName.delete(key);
+    const rawKey = inst.card_name.trim().toLowerCase();
+    const normKey = normalizeCardName(inst.card_name);
+    const frontKey = getFrontFaceName(inst.card_name).toLowerCase();
+
+    const keys = new Set([rawKey, normKey, frontKey]);
+    for (const key of keys) {
+      if (!key) continue;
+      const set = this.instancesByName.get(key);
+      if (set) {
+        set.delete(inst.instance_id);
+        if (set.size === 0) {
+          this.instancesByName.delete(key);
+        }
       }
     }
   }
@@ -885,6 +906,18 @@ class ArcaDatabase {
       return byIdClean;
     }
 
+    // 4. Fallback: Normalized MDFC or front-face name lookup
+    const norm = normalizeCardName(clean);
+    if (norm && norm !== clean) {
+      const byNorm = this.cardsByName.get(norm);
+      if (byNorm) return byNorm;
+    }
+    const front = getFrontFaceName(clean).toLowerCase();
+    if (front && front !== clean) {
+      const byFront = this.cardsByName.get(front);
+      if (byFront) return byFront;
+    }
+
     return undefined;
   }
 
@@ -910,23 +943,27 @@ class ArcaDatabase {
 
     // 2. Store canonical card
     this.cards.set(card.oracle_id, card);
-    this.cardsByName.set(cleanName, card);
+    this.updateCardNameIndex(card);
     this.saveCards();
 
     // 3. Heal only instances that match this card_name using the instancesByName index
     let instancesHealed = false;
-    const matchingInstanceIds = this.instancesByName.get(cleanName);
-    if (matchingInstanceIds) {
-      for (const instId of matchingInstanceIds) {
-        const inst = this.instances.get(instId);
-        if (inst && (inst.oracle_id !== card.oracle_id || inst.card_name !== card.name)) {
-          this.instances.set(instId, {
-            ...inst,
-            card_name: card.name,
-            oracle_id: card.oracle_id,
-            updated_at: new Date().toISOString()
-          });
-          instancesHealed = true;
+    const healKeys = new Set([cleanName, normalizeCardName(card.name), getFrontFaceName(card.name).toLowerCase()]);
+    for (const k of healKeys) {
+      if (!k) continue;
+      const matchingInstanceIds = this.instancesByName.get(k);
+      if (matchingInstanceIds) {
+        for (const instId of matchingInstanceIds) {
+          const inst = this.instances.get(instId);
+          if (inst && (inst.oracle_id !== card.oracle_id || inst.card_name !== card.name)) {
+            this.instances.set(instId, {
+              ...inst,
+              card_name: card.name,
+              oracle_id: card.oracle_id,
+              updated_at: new Date().toISOString()
+            });
+            instancesHealed = true;
+          }
         }
       }
     }
@@ -965,21 +1002,25 @@ class ArcaDatabase {
 
       // 2. Store canonical card
       this.cards.set(card.oracle_id, card);
-      this.cardsByName.set(cleanName, card);
+      this.updateCardNameIndex(card);
 
       // 3. Heal any instances whose card_name matches using instancesByName
-      const matchingInstanceIds = this.instancesByName.get(cleanName);
-      if (matchingInstanceIds) {
-        for (const instId of matchingInstanceIds) {
-          const inst = this.instances.get(instId);
-          if (inst && (inst.oracle_id !== card.oracle_id || inst.card_name !== card.name)) {
-            this.instances.set(instId, {
-              ...inst,
-              card_name: card.name,
-              oracle_id: card.oracle_id,
-              updated_at: new Date().toISOString()
-            });
-            instancesHealed = true;
+      const healKeys = new Set([cleanName, normalizeCardName(card.name), getFrontFaceName(card.name).toLowerCase()]);
+      for (const k of healKeys) {
+        if (!k) continue;
+        const matchingInstanceIds = this.instancesByName.get(k);
+        if (matchingInstanceIds) {
+          for (const instId of matchingInstanceIds) {
+            const inst = this.instances.get(instId);
+            if (inst && (inst.oracle_id !== card.oracle_id || inst.card_name !== card.name)) {
+              this.instances.set(instId, {
+                ...inst,
+                card_name: card.name,
+                oracle_id: card.oracle_id,
+                updated_at: new Date().toISOString()
+              });
+              instancesHealed = true;
+            }
           }
         }
       }

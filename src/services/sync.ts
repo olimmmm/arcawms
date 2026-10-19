@@ -1,7 +1,8 @@
 import { db } from './db';
 import { applyTheme, GuildThemeId } from './theme';
 
-type SyncStatus = 'connected' | 'connecting' | 'disconnected' | 'error';
+export type SyncStatus = 'connected' | 'connecting' | 'disconnected' | 'error';
+export type CloudUploadState = 'idle' | 'syncing' | 'synced' | 'error';
 
 function parseTimestamp(val: any): number {
   if (!val) return 0;
@@ -23,10 +24,13 @@ class SyncClient {
   private ws: WebSocket | null = null;
   private status: SyncStatus = 'disconnected';
   private listeners: Set<(status: SyncStatus) => void> = new Set();
+  private uploadState: CloudUploadState = 'idle';
+  private uploadListeners: Set<(state: CloudUploadState) => void> = new Set();
   private broadcastChannel: BroadcastChannel | null = null;
   private isProcessingRemoteUpdate = false;
   private reconnectTimer: any = null;
   private pushDebounceTimer: any = null;
+  private syncedResetTimer: any = null;
 
   constructor() {
     if (typeof window !== 'undefined') {
@@ -52,6 +56,7 @@ class SyncClient {
       // Listen to local DB changes to push mutations to sync server & other devices
       db.subscribe(() => {
         if (!this.isProcessingRemoteUpdate) {
+          this.setUploadState('syncing');
           this.schedulePush(100);
         }
       });
@@ -60,7 +65,15 @@ class SyncClient {
       const flushOnUnload = () => {
         this.flushImmediate();
       };
-      window.addEventListener('beforeunload', flushOnUnload);
+      window.addEventListener('beforeunload', (e) => {
+        if (this.isSyncing()) {
+          this.flushImmediate();
+          e.preventDefault();
+          e.returnValue = 'Cards are currently syncing to cloud server. Are you sure you want to exit?';
+          return e.returnValue;
+        }
+        flushOnUnload();
+      });
       window.addEventListener('pagehide', flushOnUnload);
       document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'hidden') {
@@ -93,6 +106,27 @@ class SyncClient {
     this.listeners.add(fn);
     fn(this.status);
     return () => this.listeners.delete(fn);
+  }
+
+  public getUploadState(): CloudUploadState {
+    return this.uploadState;
+  }
+
+  public onUploadStateChange(fn: (state: CloudUploadState) => void): () => void {
+    this.uploadListeners.add(fn);
+    fn(this.uploadState);
+    return () => this.uploadListeners.delete(fn);
+  }
+
+  private setUploadState(s: CloudUploadState) {
+    if (this.uploadState !== s) {
+      this.uploadState = s;
+      this.uploadListeners.forEach(fn => fn(s));
+    }
+  }
+
+  public isSyncing(): boolean {
+    return this.uploadState === 'syncing';
   }
 
   private setStatus(s: SyncStatus) {
@@ -262,7 +296,9 @@ class SyncClient {
     this.pushCurrentState(true);
   }
 
-  private pushCurrentState(broadcastMutation = true) {
+  private async pushCurrentState(broadcastMutation = true) {
+    this.setUploadState('syncing');
+
     const payload = {
       instances: db.getAllInstances(),
       cards: db.getAllCards(),
@@ -301,15 +337,25 @@ class SyncClient {
         clientId: CLIENT_ID, 
         broadcastMutation 
       });
-      fetch('/api/sync/store', {
+      const res = await fetch('/api/sync/store', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body
-      }).catch(err => {
-        console.debug('[SyncClient] HTTP push notice:', err);
       });
+      if (res.ok) {
+        this.setUploadState('synced');
+        if (this.syncedResetTimer) clearTimeout(this.syncedResetTimer);
+        this.syncedResetTimer = setTimeout(() => {
+          if (this.uploadState === 'synced') {
+            this.setUploadState('idle');
+          }
+        }, 3000);
+      } else {
+        this.setUploadState('error');
+      }
     } catch (err) {
       console.debug('[SyncClient] Push exception:', err);
+      this.setUploadState('error');
     }
   }
 

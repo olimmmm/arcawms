@@ -1,12 +1,14 @@
 import React from 'react';
-import { Search, Compass, PlusCircle, Settings, Archive, Bookmark } from 'lucide-react';
+import { Search, Compass, PlusCircle, Settings, Archive, Bookmark, Loader2, CheckCircle2, CloudOff } from 'lucide-react';
 import { InventoryStats } from '../types';
+import { CloudUploadState, syncClient } from '../services/sync';
 
 interface NavbarProps {
   activeTab: 'search' | 'pickpath' | 'cabinet' | 'ingest' | 'lists';
   setActiveTab: (tab: 'search' | 'pickpath' | 'cabinet' | 'ingest' | 'lists') => void;
   stats: InventoryStats;
   syncStatus: 'connected' | 'connecting' | 'disconnected' | 'error';
+  uploadState: CloudUploadState;
   onOpenSettings: () => void;
 }
 
@@ -15,6 +17,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   setActiveTab,
   stats,
   syncStatus,
+  uploadState,
   onOpenSettings
 }) => {
   const tabs = [
@@ -57,8 +60,35 @@ export const Navbar: React.FC<NavbarProps> = ({
             <span className="text-emerald-400 font-bold hidden sm:inline">€{stats.totalEurValue.toFixed(2)}</span>
           </div>
 
-          {/* Minimalist Settings Cog Icon */}
+          {/* Top Right Actions: Upload/Sync Indicator + Settings Cog */}
           <div className="flex items-center gap-2">
+            {uploadState === 'syncing' ? (
+              <div 
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-amber-500/20 border border-amber-500/50 text-amber-300 font-mono text-xs shadow-sm shadow-amber-500/10 animate-pulse cursor-wait"
+                title="Uploading changes to server... Please wait before closing or refreshing."
+              >
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-400 shrink-0" />
+                <span className="hidden sm:inline font-bold">Syncing...</span>
+              </div>
+            ) : uploadState === 'synced' ? (
+              <div 
+                className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 font-mono text-xs transition-all duration-300"
+                title="All changes synced and saved to server."
+              >
+                <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+                <span className="hidden sm:inline font-bold">Synced</span>
+              </div>
+            ) : uploadState === 'error' ? (
+              <div 
+                className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-rose-500/20 border border-rose-500/40 text-rose-300 font-mono text-xs cursor-pointer"
+                onClick={() => syncClient.forceReconnect()}
+                title="Upload issue or offline. Click to reconnect."
+              >
+                <CloudOff className="h-3.5 w-3.5 text-rose-400 shrink-0" />
+                <span className="hidden sm:inline">Offline</span>
+              </div>
+            ) : null}
+
             <button
               onClick={onOpenSettings}
               className="group relative p-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 border border-slate-700 text-slate-300 hover:text-white transition cursor-pointer"

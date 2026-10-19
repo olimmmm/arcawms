@@ -7,7 +7,7 @@ import { IngestEngine } from './components/IngestEngine';
 import { CustomListView } from './components/CustomListView';
 import { SettingsSyncModal } from './components/SettingsSyncModal';
 import { db } from './services/db';
-import { syncClient } from './services/sync';
+import { syncClient, CloudUploadState } from './services/sync';
 import { InventoryStats } from './types';
 import { applyTheme, getActiveTheme } from './services/theme';
 import { enrichMissingCards } from './services/scryfall';
@@ -18,6 +18,7 @@ export function App() {
   const [syncStatus, setSyncStatus] = useState<'connected' | 'connecting' | 'disconnected' | 'error'>(
     () => syncClient.getStatus()
   );
+  const [uploadState, setUploadState] = useState<CloudUploadState>(() => syncClient.getUploadState());
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [pendingPickPathDecklist, setPendingPickPathDecklist] = useState<string | null>(null);
 
@@ -60,6 +61,12 @@ export function App() {
     });
   }, []);
 
+  useEffect(() => {
+    return syncClient.onUploadStateChange((state) => {
+      setUploadState(state);
+    });
+  }, []);
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
       <Navbar
@@ -67,6 +74,7 @@ export function App() {
         setActiveTab={handleTabChange}
         stats={stats}
         syncStatus={syncStatus}
+        uploadState={uploadState}
         onOpenSettings={() => setIsSettingsOpen(true)}
       />
 

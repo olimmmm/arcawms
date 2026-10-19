@@ -118,6 +118,24 @@ export function compareLocations(locA: string | null | undefined, locB: string |
   return a.batch_index - b.batch_index;
 }
 
+/**
+ * Normalizes double-faced and split card names with consistent " // " spacing
+ */
+export function normalizeCardName(name: string): string {
+  if (!name) return '';
+  return name.trim().toLowerCase().replace(/\s*\/{1,2}\s*/g, ' // ');
+}
+
+/**
+ * Extracts the primary front-face name of an MDFC, flip, or split card
+ * (e.g. "Bala Ged Recovery // Bala Ged Sanctuary" -> "Bala Ged Recovery")
+ */
+export function getFrontFaceName(name: string): string {
+  if (!name) return '';
+  const parts = name.split(/\s*\/{1,2}\s*/);
+  return parts[0].trim();
+}
+
 export interface ParsedDecklistLine {
   name: string;
   count: number;
@@ -251,17 +269,40 @@ export function generatePickRoute(
   const route: PickItem[] = [];
 
   const instancesByName = new Map<string, CardInstance[]>();
+
+  const registerInstance = (key: string, inst: CardInstance) => {
+    if (!key) return;
+    let list = instancesByName.get(key);
+    if (!list) {
+      list = [];
+      instancesByName.set(key, list);
+    }
+    if (!list.includes(inst)) {
+      list.push(inst);
+    }
+  };
+
   for (const inst of allInstances) {
-    const key = inst.card_name.toLowerCase();
-    if (!instancesByName.has(key)) instancesByName.set(key, []);
-    instancesByName.get(key)!.push(inst);
+    const rawKey = inst.card_name.trim().toLowerCase();
+    const normKey = normalizeCardName(inst.card_name);
+    const frontKey = getFrontFaceName(inst.card_name).toLowerCase();
+
+    registerInstance(rawKey, inst);
+    registerInstance(normKey, inst);
+    registerInstance(frontKey, inst);
   }
 
   const allocated = new Set<string>();
 
   for (const wanted of wantedList) {
-    const key = wanted.name.toLowerCase();
-    const available = instancesByName.get(key) || [];
+    const rawKey = wanted.name.trim().toLowerCase();
+    const normKey = normalizeCardName(wanted.name);
+    const frontKey = getFrontFaceName(wanted.name).toLowerCase();
+
+    const available = instancesByName.get(rawKey)
+      || instancesByName.get(normKey)
+      || instancesByName.get(frontKey)
+      || [];
 
     let needed = wanted.count;
 
@@ -275,7 +316,13 @@ export function generatePickRoute(
       allocated.add(inst.instance_id);
 
       const coord = parseLocationId(inst.location_id);
-      const metadata = cardDictionary.get(inst.card_name.toLowerCase()) || cardDictionary.get(inst.oracle_id);
+      const metadata = cardDictionary.get(inst.card_name.toLowerCase()) 
+        || cardDictionary.get(inst.oracle_id)
+        || cardDictionary.get(normalizeCardName(inst.card_name))
+        || cardDictionary.get(getFrontFaceName(inst.card_name).toLowerCase())
+        || cardDictionary.get(rawKey)
+        || cardDictionary.get(normKey)
+        || cardDictionary.get(frontKey);
 
       route.push({
         id: `pick-${inst.instance_id}`,
@@ -305,7 +352,13 @@ export function generatePickRoute(
         if (needed <= 0) break;
         allocated.add(inst.instance_id);
 
-        const metadata = cardDictionary.get(inst.card_name.toLowerCase()) || cardDictionary.get(inst.oracle_id);
+        const metadata = cardDictionary.get(inst.card_name.toLowerCase()) 
+          || cardDictionary.get(inst.oracle_id)
+          || cardDictionary.get(normalizeCardName(inst.card_name))
+          || cardDictionary.get(getFrontFaceName(inst.card_name).toLowerCase())
+          || cardDictionary.get(rawKey)
+          || cardDictionary.get(normKey)
+          || cardDictionary.get(frontKey);
 
         route.push({
           id: `pick-${inst.instance_id}`,
@@ -333,7 +386,13 @@ export function generatePickRoute(
         if (needed <= 0) break;
         allocated.add(inst.instance_id);
 
-        const metadata = cardDictionary.get(inst.card_name.toLowerCase()) || cardDictionary.get(inst.oracle_id);
+        const metadata = cardDictionary.get(inst.card_name.toLowerCase()) 
+          || cardDictionary.get(inst.oracle_id)
+          || cardDictionary.get(normalizeCardName(inst.card_name))
+          || cardDictionary.get(getFrontFaceName(inst.card_name).toLowerCase())
+          || cardDictionary.get(rawKey)
+          || cardDictionary.get(normKey)
+          || cardDictionary.get(frontKey);
 
         route.push({
           id: `pick-${inst.instance_id}`,
@@ -354,7 +413,9 @@ export function generatePickRoute(
 
     // 4. Waterfall Tier 4: Cards NOT in collection at all (Unowned / Missing)
     while (needed > 0) {
-      const metadata = cardDictionary.get(wanted.name.toLowerCase());
+      const metadata = cardDictionary.get(rawKey)
+        || cardDictionary.get(normKey)
+        || cardDictionary.get(frontKey);
       route.push({
         id: `unowned-${wanted.name}-${needed}`,
         card_name: wanted.name,

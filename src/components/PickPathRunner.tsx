@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { CardInstance, PickItem, ScryfallCard } from '../types';
 import { db } from '../services/db';
-import { generatePickRoute, parseDecklistText, formatAsMtgText } from '../services/pickPath';
+import { generatePickRoute, parseDecklistText, formatAsMtgText, normalizeCardName, getFrontFaceName } from '../services/pickPath';
 import { playSound, triggerHaptic } from '../services/audio';
 import { getScryfallImageFallback } from '../services/scryfall';
 
@@ -65,9 +65,18 @@ export const PickPathRunner: React.FC<PickPathRunnerProps> = ({ pendingDecklist,
   const cardDictionary = useMemo(() => {
     const map = new Map<string, ScryfallCard>();
     for (const c of cards) {
-      const existing = map.get(c.name.toLowerCase());
+      const rawKey = c.name.toLowerCase();
+      const normKey = normalizeCardName(c.name);
+      const frontKey = getFrontFaceName(c.name).toLowerCase();
+
+      const existing = map.get(rawKey);
       if (!existing || existing.price_eur === 0 || (c.price_eur > 0 && c.price_eur < existing.price_eur)) {
-        map.set(c.name.toLowerCase(), c);
+        map.set(rawKey, c);
+        map.set(normKey, c);
+        map.set(frontKey, c);
+      } else {
+        if (!map.has(normKey)) map.set(normKey, c);
+        if (!map.has(frontKey)) map.set(frontKey, c);
       }
       map.set(c.oracle_id, c);
     }

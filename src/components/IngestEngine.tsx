@@ -600,13 +600,29 @@ export const IngestEngine: React.FC = () => {
         <button
           onClick={handleIngest}
           disabled={isProcessing}
-          className="w-full py-3.5 rounded-xl bg-theme-primary hover-bg-theme-primary active:opacity-90 disabled:opacity-50 font-black text-sm tracking-wide shadow-lg shadow-theme-glow flex items-center justify-center gap-2 cursor-pointer transition"
+          className={`w-full py-3.5 rounded-xl font-black text-sm tracking-wide shadow-lg flex items-center justify-center gap-2 cursor-pointer transition active:opacity-90 disabled:opacity-50 ${
+            importAsProxies
+              ? 'bg-purple-600 hover:bg-purple-500 shadow-purple-900/40 text-white'
+              : 'bg-theme-primary hover-bg-theme-primary shadow-theme-glow'
+          }`}
         >
           {isProcessing ? (
             <>
               <div className="h-4 w-4 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" />
               <span>Processing cards...</span>
             </>
+          ) : importAsProxies ? (
+            mode === 'new_to_brewing' ? (
+              <>
+                <Sparkles className="h-4 w-4 stroke-[2.5]" />
+                <span>ADD PROXIES TO BREWING & DECKS POOL</span>
+              </>
+            ) : (
+              <>
+                <Sparkles className="h-4 w-4 stroke-[2.5]" />
+                <span>INGEST AS PROXIES INTO PROXY BOX</span>
+              </>
+            )
           ) : mode === 'new_to_chaos' ? (
             <>
               <Check className="h-4 w-4 stroke-[3]" />
