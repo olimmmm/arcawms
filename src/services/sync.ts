@@ -178,53 +178,49 @@ class SyncClient {
 
     console.log(`[SyncClient] Handshake check — Local: ${localCount} cards (ts: ${localTs}) | Remote: ${remoteCount} cards (ts: ${remoteTs})`);
 
-    // Safety check: Prevent remote store with significantly fewer cards from wiping an established collection!
-    if (localCount > 50 && remoteCount < localCount * 0.7) {
-      console.warn(`[SyncClient] Refusing to overwrite local collection (${localCount} cards) with smaller remote store (${remoteCount} cards). Pushing local state to server to heal.`);
+    // Case 1: Fresh device with 0 cards in local storage
+    if (localCount === 0 && remoteCount > 0) {
+      console.log(`[SyncClient] Fresh local device (0 cards). Importing ${remoteCount} cards from server.`);
+      this.applyRemoteStore(remoteStore, remoteTs);
+      return;
+    }
+
+    // Case 2: Local has more cards than remote! Local must never be wiped by a smaller remote store.
+    if (localCount > remoteCount) {
+      console.log(`[SyncClient] Local has more cards than server (${localCount} > ${remoteCount}). Pushing local state to server.`);
       this.pushCurrentState(false);
       return;
     }
 
-    // Case 1: Server has newer changes from another device!
-    // (e.g. laptop added cards at 16:00, phone is connecting with stale 11:57 state)
-    if (remoteTs > localTs && remoteCount > 0) {
-      console.log(`[SyncClient] Remote store is newer than local (${remoteTs} > ${localTs}). Synchronizing from server.`);
-      this.isProcessingRemoteUpdate = true;
-      try {
-        if (remoteStore.settings?.theme) {
-          applyTheme(remoteStore.settings.theme as GuildThemeId);
-        }
-        db.importJSON(JSON.stringify(remoteStore), remoteTs);
-      } finally {
-        setTimeout(() => { this.isProcessingRemoteUpdate = false; }, 100);
+    // Case 3: Remote has more cards than local! Remote has new cards from another device.
+    if (remoteCount > localCount) {
+      console.log(`[SyncClient] Remote has more cards than local (${remoteCount} > ${localCount}). Synchronizing from server.`);
+      this.applyRemoteStore(remoteStore, remoteTs);
+      return;
+    }
+
+    // Case 4: Equal card count — resolve by timestamp
+    if (remoteTs > localTs) {
+      console.log(`[SyncClient] Remote timestamp is newer (${remoteTs} > ${localTs}). Synchronizing from server.`);
+      this.applyRemoteStore(remoteStore, remoteTs);
+      return;
+    } else if (localTs > remoteTs) {
+      console.log(`[SyncClient] Local timestamp is newer (${localTs} > ${remoteTs}). Passively updating server.`);
+      this.pushCurrentState(false);
+      return;
+    }
+  }
+
+  private applyRemoteStore(remoteStore: any, remoteTs: number) {
+    this.isProcessingRemoteUpdate = true;
+    try {
+      if (remoteStore.settings?.theme) {
+        applyTheme(remoteStore.settings.theme as GuildThemeId);
       }
-      return;
+      db.importJSON(JSON.stringify(remoteStore), remoteTs);
+    } finally {
+      setTimeout(() => { this.isProcessingRemoteUpdate = false; }, 100);
     }
-
-    // Case 2: Local state is newer than server!
-    // (e.g. Render container restarted with stale seed data, or local edits happened while offline)
-    if (localTs > remoteTs && localCount > 0) {
-      console.log(`[SyncClient] Local store is newer than server (${localTs} > ${remoteTs}). Passively updating server.`);
-      this.pushCurrentState(false); // DO NOT broadcast mutation to other active clients
-      return;
-    }
-
-    // Case 3: Fresh device with 0 cards in local storage
-    if (localCount === 0 && remoteCount > 0) {
-      console.log(`[SyncClient] Fresh local device (0 cards). Importing ${remoteCount} cards from server.`);
-      this.isProcessingRemoteUpdate = true;
-      try {
-        if (remoteStore.settings?.theme) {
-          applyTheme(remoteStore.settings.theme as GuildThemeId);
-        }
-        db.importJSON(JSON.stringify(remoteStore), remoteTs);
-      } finally {
-        setTimeout(() => { this.isProcessingRemoteUpdate = false; }, 100);
-      }
-      return;
-    }
-
-    // Case 4: Timestamps are equal — both in sync!
   }
 
   /**
@@ -236,20 +232,18 @@ class SyncClient {
 
     const localTs = parseTimestamp(db.getLastUpdated());
     const remoteTs = parseTimestamp(remotePayload.timestamp || remotePayload.last_updated);
+    const localCount = db.getAllInstances().length;
     const remoteCount = remotePayload.instances.length;
 
-    // Only accept live broadcast if remote timestamp is genuinely newer
+    // Never wipe out a local collection with more cards
+    if (localCount > remoteCount) {
+      console.log(`[SyncClient] Ignoring broadcast with fewer cards (${remoteCount} vs local ${localCount}).`);
+      return;
+    }
+
     if (remoteTs > localTs && remoteCount > 0) {
       console.log(`[SyncClient] Applying real-time update from client ${senderClientId} (${remoteCount} cards, ts: ${remoteTs}).`);
-      this.isProcessingRemoteUpdate = true;
-      try {
-        if (remotePayload.settings?.theme) {
-          applyTheme(remotePayload.settings.theme as GuildThemeId);
-        }
-        db.importJSON(JSON.stringify(remotePayload), remoteTs);
-      } finally {
-        setTimeout(() => { this.isProcessingRemoteUpdate = false; }, 100);
-      }
+      this.applyRemoteStore(remotePayload, remoteTs);
     }
   }
 

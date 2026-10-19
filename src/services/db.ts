@@ -426,124 +426,16 @@ class ArcaDatabase {
   private init() {
     if (this.initialized) return;
 
+    // Fast-path: read lastUpdated timestamp if available
     try {
       const storedTs = localStorage.getItem(STORAGE_KEY_LAST_UPDATED);
-      if (storedTs) {
-        this.lastUpdated = parseInt(storedTs, 10) || 0;
-      } else {
-        this.lastUpdated = 0;
-      }
+      this.lastUpdated = storedTs ? (parseInt(storedTs, 10) || 0) : 0;
     } catch {
       this.lastUpdated = 0;
     }
 
-    try {
-      const storedCards = localStorage.getItem(STORAGE_KEY_CARDS);
-      if (storedCards) {
-        const parsed: ScryfallCard[] = JSON.parse(storedCards);
-        parsed.forEach(c => this.cards.set(c.oracle_id, c));
-      } else {
-        SEED_CARDS.forEach(c => this.cards.set(c.oracle_id, c));
-        this.saveCards();
-      }
-    } catch {
-      SEED_CARDS.forEach(c => this.cards.set(c.oracle_id, c));
-    }
-
-    try {
-      const storedInst = localStorage.getItem(STORAGE_KEY_INSTANCES);
-      if (storedInst) {
-        const parsed: CardInstance[] = JSON.parse(storedInst);
-        parsed.forEach(inst => this.instances.set(inst.instance_id, inst));
-      } else {
-        SEED_INSTANCES.forEach(inst => this.instances.set(inst.instance_id, inst));
-        this.saveInstances();
-      }
-    } catch {
-      SEED_INSTANCES.forEach(inst => this.instances.set(inst.instance_id, inst));
-    }
-
-    try {
-      const storedHist = localStorage.getItem(STORAGE_KEY_HISTORY);
-      if (storedHist) {
-        this.history = JSON.parse(storedHist);
-      } else {
-        this.history = [...INITIAL_HISTORY];
-        this.saveHistory();
-      }
-    } catch {
-      this.history = [...INITIAL_HISTORY];
-    }
-
-    try {
-      const storedLists = localStorage.getItem(STORAGE_KEY_CUSTOM_LISTS);
-      if (storedLists) {
-        const parsed: CustomList[] = JSON.parse(storedLists);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          parsed.forEach(list => {
-            if (list && list.id && list.name) {
-              this.customLists.set(list.id, {
-                id: list.id,
-                name: list.name,
-                description: list.description || '',
-                created_at: list.created_at || new Date().toISOString(),
-                updated_at: list.updated_at || new Date().toISOString(),
-                items: Array.isArray(list.items) ? list.items : []
-              });
-            }
-          });
-        } else {
-          SEED_CUSTOM_LISTS.forEach(l => this.customLists.set(l.id, { ...l, items: [...l.items] }));
-          this.saveCustomLists();
-        }
-      } else {
-        SEED_CUSTOM_LISTS.forEach(l => this.customLists.set(l.id, { ...l, items: [...l.items] }));
-        this.saveCustomLists();
-      }
-    } catch {
-      SEED_CUSTOM_LISTS.forEach(l => this.customLists.set(l.id, { ...l, items: [...l.items] }));
-    }
-
-    this.rebuildIndexes();
-    this.healAndDeduplicateCards();
-
-    // Sanitize proxy invariants:
-    // 1. Storage Units (State A) CANNOT contain proxies. If a card is in State A, is_proxy MUST be false.
-    // 2. Proxy Box (State P) cards MUST have is_proxy = true.
-    let instancesSanitized = false;
-    for (const [instId, inst] of this.instances.entries()) {
-      if (inst.state === 'A' && inst.is_proxy) {
-        this.instances.set(instId, {
-          ...inst,
-          is_proxy: false,
-          updated_at: new Date().toISOString()
-        });
-        instancesSanitized = true;
-      } else if (inst.state === 'P' && !inst.is_proxy) {
-        this.instances.set(instId, {
-          ...inst,
-          is_proxy: true,
-          updated_at: new Date().toISOString()
-        });
-        instancesSanitized = true;
-      }
-    }
-    if (instancesSanitized) {
-      this.saveInstances();
-      this.touchUpdated();
-    }
-
-    try {
-      const rawSnaps = localStorage.getItem('arcawms_snapshots_v1');
-      if (rawSnaps) {
-        const parsed = JSON.parse(rawSnaps);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          this.snapshots = parsed;
-        }
-      }
-    } catch {}
-
-    this.initialized = true;
+    this.snapshots = [];
+    // Full hydration is handled asynchronously by hydrateFromIndexedDB() from IndexedDB
   }
 
   private async hydrateFromIndexedDB(): Promise<void> {
@@ -557,79 +449,139 @@ class ArcaDatabase {
         idbGet<any[]>('arcawms_snapshots_v1')
       ]);
 
-      let hasHydrated = false;
-
-      // 1. Instances: hydrate if IDB has cards and IDB has at least as many as memory or is newer
+      // CASE A: IndexedDB already contains instances (standard state)
       if (Array.isArray(idbInst) && idbInst.length > 0) {
-        if (idbInst.length >= this.instances.size || (idbTs && idbTs >= this.lastUpdated)) {
-          this.instances.clear();
-          idbInst.forEach(inst => this.instances.set(inst.instance_id, inst));
-          hasHydrated = true;
-        }
-      }
+        this.instances.clear();
+        idbInst.forEach(inst => this.instances.set(inst.instance_id, inst));
 
-      // 2. Cards dictionary: hydrate if IDB has cards
-      if (Array.isArray(idbCards) && idbCards.length > 0) {
-        if (idbCards.length >= this.cards.size) {
+        if (Array.isArray(idbCards) && idbCards.length > 0) {
           this.cards.clear();
           idbCards.forEach(c => this.cards.set(c.oracle_id, c));
-          hasHydrated = true;
+        }
+
+        if (Array.isArray(idbLists) && idbLists.length > 0) {
+          this.customLists.clear();
+          idbLists.forEach(l => this.customLists.set(l.id, l));
+        }
+
+        if (Array.isArray(idbHist) && idbHist.length > 0) {
+          this.history = idbHist;
+        }
+
+        if (Array.isArray(idbSnaps) && idbSnaps.length > 0) {
+          this.snapshots = idbSnaps;
+        }
+
+        if (typeof idbTs === 'number' && idbTs > 0) {
+          this.lastUpdated = idbTs;
+        }
+
+        // Clean up legacy localStorage storage keys to reclaim the 5MB browser quota
+        try {
+          localStorage.removeItem(STORAGE_KEY_INSTANCES);
+          localStorage.removeItem(STORAGE_KEY_CARDS);
+          localStorage.removeItem(STORAGE_KEY_HISTORY);
+          localStorage.removeItem(STORAGE_KEY_CUSTOM_LISTS);
+          localStorage.removeItem('arcawms_snapshots_v1');
+        } catch {}
+      }
+      // CASE B: IndexedDB is empty — check for legacy localStorage data to migrate
+      else {
+        let migrated = false;
+        try {
+          const storedInst = localStorage.getItem(STORAGE_KEY_INSTANCES);
+          if (storedInst) {
+            const parsed: CardInstance[] = JSON.parse(storedInst);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              this.instances.clear();
+              parsed.forEach(inst => this.instances.set(inst.instance_id, inst));
+              migrated = true;
+            }
+          }
+
+          const storedCards = localStorage.getItem(STORAGE_KEY_CARDS);
+          if (storedCards) {
+            const parsed: ScryfallCard[] = JSON.parse(storedCards);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              this.cards.clear();
+              parsed.forEach(c => this.cards.set(c.oracle_id, c));
+            }
+          }
+
+          const storedLists = localStorage.getItem(STORAGE_KEY_CUSTOM_LISTS);
+          if (storedLists) {
+            const parsed: CustomList[] = JSON.parse(storedLists);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              this.customLists.clear();
+              parsed.forEach(l => this.customLists.set(l.id, l));
+            }
+          }
+
+          const storedHist = localStorage.getItem(STORAGE_KEY_HISTORY);
+          if (storedHist) {
+            const parsed = JSON.parse(storedHist);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              this.history = parsed;
+            }
+          }
+
+          const storedSnaps = localStorage.getItem('arcawms_snapshots_v1');
+          if (storedSnaps) {
+            const parsed = JSON.parse(storedSnaps);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              this.snapshots = parsed;
+            }
+          }
+
+          const storedTs = localStorage.getItem(STORAGE_KEY_LAST_UPDATED);
+          if (storedTs) {
+            this.lastUpdated = parseInt(storedTs, 10) || Date.now();
+          }
+        } catch {}
+
+        if (migrated && this.instances.size > 0) {
+          console.log(`[ArcaDB] Migrated ${this.instances.size} cards from localStorage to IndexedDB`);
+          await Promise.all([
+            idbSet(STORAGE_KEY_INSTANCES, Array.from(this.instances.values())),
+            idbSet(STORAGE_KEY_CARDS, Array.from(this.cards.values())),
+            idbSet(STORAGE_KEY_CUSTOM_LISTS, Array.from(this.customLists.values())),
+            idbSet(STORAGE_KEY_HISTORY, this.history),
+            idbSet(STORAGE_KEY_LAST_UPDATED, this.lastUpdated),
+            idbSet('arcawms_snapshots_v1', this.snapshots)
+          ]);
+          try {
+            localStorage.removeItem(STORAGE_KEY_INSTANCES);
+            localStorage.removeItem(STORAGE_KEY_CARDS);
+            localStorage.removeItem(STORAGE_KEY_HISTORY);
+            localStorage.removeItem(STORAGE_KEY_CUSTOM_LISTS);
+            localStorage.removeItem('arcawms_snapshots_v1');
+          } catch {}
+        } else {
+          // CASE C: Brand new user with no data anywhere — load seed data
+          SEED_CARDS.forEach(c => this.cards.set(c.oracle_id, c));
+          SEED_INSTANCES.forEach(inst => this.instances.set(inst.instance_id, inst));
+          SEED_CUSTOM_LISTS.forEach(l => this.customLists.set(l.id, { ...l, items: [...l.items] }));
+          this.history = [...INITIAL_HISTORY];
+          this.lastUpdated = Date.now();
+
+          await Promise.all([
+            idbSet(STORAGE_KEY_INSTANCES, Array.from(this.instances.values())),
+            idbSet(STORAGE_KEY_CARDS, Array.from(this.cards.values())),
+            idbSet(STORAGE_KEY_CUSTOM_LISTS, Array.from(this.customLists.values())),
+            idbSet(STORAGE_KEY_HISTORY, this.history),
+            idbSet(STORAGE_KEY_LAST_UPDATED, this.lastUpdated)
+          ]);
         }
       }
 
-      // 3. Custom lists
-      if (Array.isArray(idbLists) && idbLists.length > 0) {
-        this.customLists.clear();
-        idbLists.forEach(l => this.customLists.set(l.id, l));
-        hasHydrated = true;
-      }
-
-      // 4. Activity history
-      if (Array.isArray(idbHist) && idbHist.length > 0) {
-        this.history = idbHist;
-      }
-
-      // 5. Snapshots
-      if (Array.isArray(idbSnaps) && idbSnaps.length > 0) {
-        this.snapshots = idbSnaps;
-      } else if (this.snapshots.length > 0) {
-        idbSet('arcawms_snapshots_v1', this.snapshots);
-      }
-
-      // 6. Timestamp
-      if (typeof idbTs === 'number' && idbTs > this.lastUpdated) {
-        this.lastUpdated = idbTs;
-      }
-
-      // If IDB was empty or incomplete, persist current in-memory state to IDB as initial migration
-      if (!idbInst || idbInst.length === 0) {
-        if (this.instances.size > 0) {
-          idbSet(STORAGE_KEY_INSTANCES, Array.from(this.instances.values()));
-        }
-        if (this.cards.size > 0) {
-          idbSet(STORAGE_KEY_CARDS, Array.from(this.cards.values()));
-        }
-        if (this.customLists.size > 0) {
-          idbSet(STORAGE_KEY_CUSTOM_LISTS, Array.from(this.customLists.values()));
-        }
-        if (this.history.length > 0) {
-          idbSet(STORAGE_KEY_HISTORY, this.history);
-        }
-        idbSet(STORAGE_KEY_LAST_UPDATED, this.lastUpdated);
-      }
-
-      // Always free localStorage snapshot quota
-      try {
-        localStorage.removeItem('arcawms_snapshots_v1');
-      } catch {}
-
-      if (hasHydrated) {
-        this.rebuildIndexes();
-        this.healAndDeduplicateCards();
-        this.notify();
-      }
+      this.rebuildIndexes();
+      this.healAndDeduplicateCards();
+      this.initialized = true;
+      this.notify();
     } catch (err) {
       console.warn('[ArcaDB] Error hydrating from IndexedDB:', err);
+      this.initialized = true;
+      this.notify();
     }
   }
 
@@ -638,55 +590,31 @@ class ArcaDatabase {
   }
 
   public hasLocalStoredInstances(): boolean {
-    if (this.instances.size > 0) return true;
-    try {
-      const stored = localStorage.getItem(STORAGE_KEY_INSTANCES);
-      return stored !== null && stored !== '[]';
-    } catch {
-      return false;
-    }
-  }
-
-  private safeSetItem(key: string, value: string): void {
-    try {
-      localStorage.setItem(key, value);
-    } catch {
-      // localStorage 5MB quota exceeded - completely normal and expected for large MTG collections.
-      // Data is safely persisted in IndexedDB.
-      try {
-        localStorage.removeItem('arcawms_snapshots_v1');
-      } catch {}
-    }
+    return this.instances.size > 0;
   }
 
   private touchUpdated(ts?: number) {
     this.lastUpdated = (typeof ts === 'number' && ts > 0) ? ts : Date.now();
     idbSet(STORAGE_KEY_LAST_UPDATED, this.lastUpdated);
-    this.safeSetItem(STORAGE_KEY_LAST_UPDATED, String(this.lastUpdated));
+    try {
+      localStorage.setItem(STORAGE_KEY_LAST_UPDATED, String(this.lastUpdated));
+    } catch {}
   }
 
   private saveInstances() {
-    const list = Array.from(this.instances.values());
-    idbSet(STORAGE_KEY_INSTANCES, list);
-    this.safeSetItem(STORAGE_KEY_INSTANCES, JSON.stringify(list));
+    idbSet(STORAGE_KEY_INSTANCES, Array.from(this.instances.values()));
   }
 
   private saveCards() {
-    const list = Array.from(this.cards.values());
-    idbSet(STORAGE_KEY_CARDS, list);
-    this.safeSetItem(STORAGE_KEY_CARDS, JSON.stringify(list));
+    idbSet(STORAGE_KEY_CARDS, Array.from(this.cards.values()));
   }
 
   private saveHistory() {
-    const slice = this.history.slice(0, 100);
-    idbSet(STORAGE_KEY_HISTORY, slice);
-    this.safeSetItem(STORAGE_KEY_HISTORY, JSON.stringify(slice));
+    idbSet(STORAGE_KEY_HISTORY, this.history.slice(0, 100));
   }
 
   private saveCustomLists() {
-    const list = Array.from(this.customLists.values());
-    idbSet(STORAGE_KEY_CUSTOM_LISTS, list);
-    this.safeSetItem(STORAGE_KEY_CUSTOM_LISTS, JSON.stringify(list));
+    idbSet(STORAGE_KEY_CUSTOM_LISTS, Array.from(this.customLists.values()));
   }
 
   // === CUSTOM LISTS CRUD & ITEM MANAGEMENT ===
