@@ -335,16 +335,23 @@ export const SettingsSyncModal: React.FC<SettingsSyncModalProps> = ({
     const file = e.target.files?.[0];
     if (!file) return;
 
+    // Reset input value so user can re-import the same file if needed
+    e.target.value = '';
+
     const reader = new FileReader();
-    reader.onload = (event) => {
+    reader.onload = async (event) => {
       const content = event.target?.result as string;
+      syncClient.pauseSyncForImport();
       const res = db.importJSON(content);
       if (res.success) {
         playSound('success');
-        setImportStatus(`Successfully restored ${res.count} cards from backup!`);
+        setImportStatus(`Successfully restored ${res.count} cards from backup! Syncing to cloud...`);
         setSnapshots(db.getSnapshots());
         setActiveThemeId(getActiveTheme());
+        await syncClient.resumeSyncAndPush();
+        setImportStatus(`Successfully restored ${res.count} cards from backup and synced to cloud!`);
       } else {
+        syncClient.resumeSync();
         playSound('error');
         setImportStatus(`Import failed: ${res.error}`);
       }
@@ -352,23 +359,31 @@ export const SettingsSyncModal: React.FC<SettingsSyncModalProps> = ({
     reader.readAsText(file);
   };
 
-  const handleRestoreSnapshot = (id: string, label: string) => {
+  const handleRestoreSnapshot = async (id: string, label: string) => {
     if (window.confirm(`Restore collection snapshot from "${label}"? Current unsaved changes will be replaced.`)) {
       playSound('success');
+      syncClient.pauseSyncForImport();
       const ok = db.restoreSnapshot(id);
       if (ok) {
-        setImportStatus(`Restored snapshot: ${label}`);
+        setImportStatus(`Restored snapshot: ${label}. Syncing...`);
         setSnapshots(db.getSnapshots());
+        await syncClient.resumeSyncAndPush();
+        setImportStatus(`Restored snapshot: ${label} and synced to cloud!`);
+      } else {
+        syncClient.resumeSync();
       }
     }
   };
 
-  const handleResetToSample = () => {
+  const handleResetToSample = async () => {
     if (window.confirm('Reset database to realistic MTG sample inventory? An auto-snapshot will be saved first.')) {
       playSound('success');
+      syncClient.pauseSyncForImport();
       db.resetToSample();
       setSnapshots(db.getSnapshots());
-      setImportStatus('Database successfully reset to initial seed data.');
+      setImportStatus('Database successfully reset to initial seed data. Syncing...');
+      await syncClient.resumeSyncAndPush();
+      setImportStatus('Database successfully reset and synced to cloud.');
     }
   };
 

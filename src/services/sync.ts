@@ -72,11 +72,29 @@ class SyncClient {
   private uploadListeners: Set<(state: CloudUploadState) => void> = new Set();
   private broadcastChannel: BroadcastChannel | null = null;
   private isProcessingRemoteUpdate = false;
+  private isUserImporting = false;
   private reconnectTimer: any = null;
   private pushDebounceTimer: any = null;
   private syncedResetTimer: any = null;
   private pingTimer: any = null;
   private wsFailCount = 0;
+
+  public pauseSyncForImport() {
+    this.isUserImporting = true;
+    if (this.pushDebounceTimer) {
+      clearTimeout(this.pushDebounceTimer);
+      this.pushDebounceTimer = null;
+    }
+  }
+
+  public resumeSync() {
+    this.isUserImporting = false;
+  }
+
+  public async resumeSyncAndPush() {
+    this.isUserImporting = false;
+    await this.pushCurrentState(true);
+  }
 
   constructor() {
     if (typeof window !== 'undefined') {
@@ -133,8 +151,10 @@ class SyncClient {
   }
 
   private async checkServerStoreHttp() {
+    if (this.isUserImporting) return;
     try {
       await db.whenHydrated();
+      if (this.isUserImporting) return;
       // Bandwidth optimization: check lightweight metadata (~50B) first instead of downloading full store (MBs)
       const res = await fetch('/api/sync/meta', { headers: getSyncHeaders() });
       if (res.ok) {
@@ -324,6 +344,7 @@ class SyncClient {
    * Compares timestamps without blasting out mutations to active clients.
    */
   private reconcileWithServer(remoteStore: any) {
+    if (this.isUserImporting) return;
     if (!remoteStore || !Array.isArray(remoteStore.instances)) return;
 
     const localCount = db.getAllInstances().length;
@@ -381,6 +402,7 @@ class SyncClient {
    * Handles a live broadcast mutation emitted by another active client.
    */
   private handleLiveBroadcast(remotePayload: any, senderClientId?: string) {
+    if (this.isUserImporting) return;
     if (!remotePayload || !Array.isArray(remotePayload.instances)) return;
     if (senderClientId && senderClientId === CLIENT_ID) return;
 

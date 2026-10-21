@@ -2259,7 +2259,12 @@ class ArcaDatabase {
       this.rebuildIndexes();
       this.saveInstances();
 
-      this.touchUpdated(remoteTimestamp || data.timestamp || data.last_updated || Date.now());
+      // If remoteTimestamp is passed, this import comes from an automated cloud sync.
+      // If remoteTimestamp is omitted, this is a deliberate user-initiated backup restore.
+      // Deliberate user restores MUST receive a fresh Date.now() timestamp so they take priority
+      // over any older server state and immediately push to the cloud.
+      const effectiveTimestamp = remoteTimestamp ? remoteTimestamp : Date.now();
+      this.touchUpdated(effectiveTimestamp);
       this.healAndDeduplicateCards();
       this.notify();
 
@@ -2284,6 +2289,7 @@ class ArcaDatabase {
     this.saveInstances();
     this.saveCustomLists();
     this.saveHistory();
+    this.touchUpdated();
     this.notify();
   }
 }
