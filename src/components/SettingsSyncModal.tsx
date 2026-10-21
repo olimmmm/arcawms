@@ -25,7 +25,7 @@ import {
   EyeOff
 } from 'lucide-react';
 import { db } from '../services/db';
-import { syncClient, getSyncHeaders } from '../services/sync';
+import { syncClient, getSyncHeaders, cleanGithubToken, cleanGistId } from '../services/sync';
 import { playSound } from '../services/audio';
 import { GUILD_THEMES, GuildThemeId, applyTheme, getActiveTheme } from '../services/theme';
 import { enrichMissingCards, subscribeEnrichProgress, getCurrentEnrichProgress, EnrichProgressState } from '../services/scryfall';
@@ -84,7 +84,8 @@ export const SettingsSyncModal: React.FC<SettingsSyncModalProps> = ({
 
   const fetchCloudStatus = async () => {
     try {
-      const res = await fetch('/api/sync/cloud-status', { headers: getSyncHeaders() });
+      const headers = getSyncHeaders();
+      const res = await fetch('/api/sync/cloud-status', { headers });
       if (res.ok) {
         const data = await res.json();
         setCloudStatus(data);
@@ -111,16 +112,29 @@ export const SettingsSyncModal: React.FC<SettingsSyncModalProps> = ({
     setIsSavingCloud(true);
     setCloudMessage({ type: 'info', text: 'Validating token & connecting to GitHub Gist...' });
 
-    const cleanToken = githubTokenInput.trim();
-    const cleanGistId = gistIdInput.trim();
+    const cleanToken = cleanGithubToken(githubTokenInput);
+    const cleanGist = cleanGistId(gistIdInput);
+
+    // Update input display with cleaned values so any invisible junk is removed
+    setGithubTokenInput(cleanToken);
+    setGistIdInput(cleanGist);
 
     db.updateSettings({
       githubToken: cleanToken || undefined,
-      gistId: cleanGistId || undefined
+      gistId: cleanGist || undefined
     });
 
     try {
-      const res = await fetch('/api/sync/cloud-status', { headers: getSyncHeaders() });
+      const headers = getSyncHeaders();
+      let res = await fetch('/api/sync/cloud-status', { 
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...headers },
+        body: JSON.stringify({ token: cleanToken, gistId: cleanGist })
+      });
+      if (!res.ok) {
+        res = await fetch('/api/sync/cloud-status', { headers });
+      }
+
       if (res.ok) {
         const data = await res.json();
         setCloudStatus(data);
@@ -799,7 +813,7 @@ export const SettingsSyncModal: React.FC<SettingsSyncModalProps> = ({
                       <input
                         type={showPassword ? 'text' : 'password'}
                         value={githubTokenInput}
-                        onChange={(e) => setGithubTokenInput(e.target.value)}
+                        onChange={(e) => setGithubTokenInput(cleanGithubToken(e.target.value))}
                         placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
                         className="w-full px-3 py-1.5 pr-9 rounded-lg bg-slate-950 border border-slate-700 text-xs text-white font-mono placeholder:text-slate-600 focus:outline-none focus:border-theme-primary"
                       />
@@ -824,7 +838,7 @@ export const SettingsSyncModal: React.FC<SettingsSyncModalProps> = ({
                     <input
                       type="text"
                       value={gistIdInput}
-                      onChange={(e) => setGistIdInput(e.target.value)}
+                      onChange={(e) => setGistIdInput(cleanGistId(e.target.value))}
                       placeholder="e.g. 7f9a1b2c3d4e5f6..."
                       className="w-full px-3 py-1.5 rounded-lg bg-slate-950 border border-slate-700 text-xs text-white font-mono placeholder:text-slate-600 focus:outline-none focus:border-theme-primary"
                     />

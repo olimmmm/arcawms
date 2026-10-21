@@ -4,21 +4,43 @@ const GIST_DESCRIPTION = 'ArcaWMS Cloud Storage Backup (Do not delete)';
 
 let cachedGistId: string | null = (process.env.GIST_ID || '').trim() || null;
 
+function cleanAscii(val: any): string {
+  if (!val || typeof val !== 'string') return '';
+  return val.replace(/[^\x21-\x7E]/g, '').trim();
+}
+
 export function getToken(req?: any): string {
+  let token = '';
   const auth = req?.headers?.authorization || req?.headers?.Authorization;
   if (auth && typeof auth === 'string' && auth.startsWith('Bearer ')) {
-    const extracted = auth.substring(7).trim();
-    if (extracted) return extracted;
+    token = auth.substring(7).trim();
+  } else if (req?.query?.token && typeof req.query.token === 'string') {
+    token = req.query.token.trim();
+  } else if (req?.body?.token && typeof req.body.token === 'string') {
+    token = req.body.token.trim();
+  } else {
+    token = (process.env.GITHUB_TOKEN || process.env.GITHUB_GIST_TOKEN || '').trim();
   }
-  return (process.env.GITHUB_TOKEN || process.env.GITHUB_GIST_TOKEN || '').trim();
+  return cleanAscii(token);
 }
 
 export function getCustomGistId(req?: any): string | null {
+  let id = '';
   const headerId = req?.headers?.['x-gist-id'];
   if (headerId && typeof headerId === 'string' && headerId.trim()) {
-    return headerId.trim();
+    id = headerId.trim();
+  } else if (req?.query?.gistId && typeof req.query.gistId === 'string') {
+    id = req.query.gistId.trim();
+  } else if (req?.body?.gistId && typeof req.body.gistId === 'string') {
+    id = req.body.gistId.trim();
+  } else {
+    id = (process.env.GIST_ID || '').trim();
   }
-  return (process.env.GIST_ID || '').trim() || null;
+
+  const cleaned = cleanAscii(id);
+  if (!cleaned) return cachedGistId;
+  const urlMatch = cleaned.match(/gist\.github\.com\/(?:[^/]+\/)?([a-f0-9]+)/i);
+  return (urlMatch && urlMatch[1]) ? urlMatch[1] : cleaned;
 }
 
 function getHeaders(req?: any): Record<string, string> {

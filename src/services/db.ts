@@ -342,6 +342,25 @@ export const SEED_CUSTOM_LISTS: CustomList[] = [
   }
 ];
 
+function cleanTokenAscii(val?: string): string {
+  if (!val || typeof val !== 'string') return '';
+  let cleaned = val.trim().replace(/^["'`]|["'`]$/g, '');
+  if (cleaned.toLowerCase().startsWith('bearer ')) {
+    cleaned = cleaned.substring(7).trim();
+  }
+  return cleaned.replace(/[^\x21-\x7E]/g, '');
+}
+
+function cleanGistIdAscii(val?: string): string {
+  if (!val || typeof val !== 'string') return '';
+  let cleaned = val.trim().replace(/^["'`]|["'`]$/g, '');
+  const urlMatch = cleaned.match(/gist\.github\.com\/(?:[^/]+\/)?([a-f0-9]+)/i);
+  if (urlMatch && urlMatch[1]) {
+    cleaned = urlMatch[1];
+  }
+  return cleaned.replace(/[^\x21-\x7E]/g, '');
+}
+
 class ArcaDatabase {
   private instances: Map<string, CardInstance> = new Map();
   private cards: Map<string, ScryfallCard> = new Map();
@@ -1979,14 +1998,30 @@ class ArcaDatabase {
   public getSettings(): { theme: string; unitCount?: number; githubToken?: string; gistId?: string } {
     try {
       const raw = localStorage.getItem('arcawms_settings_v1');
-      if (raw) return JSON.parse(raw);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed.githubToken) {
+          parsed.githubToken = cleanTokenAscii(parsed.githubToken);
+        }
+        if (parsed.gistId) {
+          parsed.gistId = cleanGistIdAscii(parsed.gistId);
+        }
+        return parsed;
+      }
     } catch {}
     return { theme: 'orzhov', unitCount: 9 };
   }
 
   public updateSettings(settings: Partial<{ theme: string; unitCount?: number; githubToken?: string; gistId?: string }>) {
     const current = this.getSettings();
-    const next = { ...current, ...settings };
+    const cleanToken = settings.githubToken !== undefined ? cleanTokenAscii(settings.githubToken) : current.githubToken;
+    const cleanGist = settings.gistId !== undefined ? cleanGistIdAscii(settings.gistId) : current.gistId;
+    const next = { 
+      ...current, 
+      ...settings,
+      githubToken: cleanToken || undefined,
+      gistId: cleanGist || undefined
+    };
     try {
       localStorage.setItem('arcawms_settings_v1', JSON.stringify(next));
     } catch {}

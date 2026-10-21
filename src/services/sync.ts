@@ -20,14 +20,46 @@ const CLIENT_ID = typeof crypto !== 'undefined' && crypto.randomUUID
   ? crypto.randomUUID() 
   : 'client-' + Math.random().toString(36).substring(2, 10);
 
+export function cleanHeaderAscii(val: string): string {
+  if (!val) return '';
+  return val.replace(/[^\x21-\x7E]/g, '');
+}
+
+export function cleanGithubToken(token: string): string {
+  if (!token) return '';
+  let cleaned = token.trim();
+  cleaned = cleaned.replace(/^["'`]|["'`]$/g, '');
+  if (cleaned.toLowerCase().startsWith('bearer ')) {
+    cleaned = cleaned.substring(7).trim();
+  }
+  return cleanHeaderAscii(cleaned);
+}
+
+export function cleanGistId(gistInput: string): string {
+  if (!gistInput) return '';
+  let cleaned = gistInput.trim();
+  cleaned = cleaned.replace(/^["'`]|["'`]$/g, '');
+  const urlMatch = cleaned.match(/gist\.github\.com\/(?:[^/]+\/)?([a-f0-9]+)/i);
+  if (urlMatch && urlMatch[1]) {
+    return cleanHeaderAscii(urlMatch[1]);
+  }
+  return cleanHeaderAscii(cleaned);
+}
+
 export function getSyncHeaders(): Record<string, string> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  const settings = db.getSettings();
-  if (settings.githubToken) {
-    headers['Authorization'] = `Bearer ${settings.githubToken.trim()}`;
-  }
-  if (settings.gistId) {
-    headers['x-gist-id'] = settings.gistId.trim();
+  try {
+    const settings = db.getSettings();
+    const token = cleanGithubToken(settings.githubToken || '');
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    const gistId = cleanGistId(settings.gistId || '');
+    if (gistId) {
+      headers['x-gist-id'] = gistId;
+    }
+  } catch (err) {
+    console.debug('[SyncClient] Error building sync headers:', err);
   }
   return headers;
 }
