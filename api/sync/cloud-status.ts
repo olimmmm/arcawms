@@ -55,12 +55,12 @@ function getHeaders(req?: any): Record<string, string> {
   };
 }
 
-async function getGistId(req?: any): Promise<string | null> {
+async function resolveGist(req?: any): Promise<{ gistId: string | null; error?: string }> {
   const customId = getCustomGistId(req);
-  if (customId) return customId;
-  if (cachedGistId) return cachedGistId;
+  if (customId) return { gistId: customId };
+  if (cachedGistId) return { gistId: cachedGistId };
   const token = getToken(req);
-  if (!token) return null;
+  if (!token) return { gistId: null, error: 'No GitHub token provided' };
 
   try {
     const listRes = await fetch(`${GITHUB_API_URL}/gists?per_page=100`, {
@@ -74,8 +74,14 @@ async function getGistId(req?: any): Promise<string | null> {
       );
       if (existing) {
         cachedGistId = existing.id;
-        return cachedGistId;
+        return { gistId: cachedGistId };
       }
+    } else {
+      const errData: any = await listRes.json().catch(() => ({}));
+      return { 
+        gistId: null, 
+        error: `GitHub API (${listRes.status}): ${errData?.message || listRes.statusText || 'Unauthorized (check token and gist scope)'}` 
+      };
     }
 
     // Create if not found
@@ -101,12 +107,17 @@ async function getGistId(req?: any): Promise<string | null> {
     if (createRes.ok) {
       const created = await createRes.json();
       cachedGistId = created.id;
-      return cachedGistId;
+      return { gistId: cachedGistId };
+    } else {
+      const errData: any = await createRes.json().catch(() => ({}));
+      return { 
+        gistId: null, 
+        error: `Gist creation (${createRes.status}): ${errData?.message || createRes.statusText}` 
+      };
     }
-  } catch (err) {
-    console.error('[Vercel Gist] Error resolving Gist ID:', err);
+  } catch (err: any) {
+    return { gistId: null, error: err?.message || String(err) };
   }
-  return null;
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -121,12 +132,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const token = getToken(req);
     const configured = Boolean(token);
-    const gistId = await getGistId(req);
+    const { gistId, error } = await resolveGist(req);
 
     return res.status(200).json({
       type: configured ? 'github_gist' : 'local_only',
       configured: Boolean(configured && gistId),
-      gistId
+      gistId,
+      error: !gistId ? (error || 'Failed to authenticate with GitHub') : undefined
     });
   } catch (err: any) {
     console.error('[cloud-status] Handler error:', err);
