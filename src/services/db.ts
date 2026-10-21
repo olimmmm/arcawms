@@ -1996,35 +1996,71 @@ class ArcaDatabase {
   }
 
   public getSettings(): { theme: string; unitCount?: number; githubToken?: string; gistId?: string } {
+    let theme = 'orzhov';
+    let unitCount = 9;
     try {
       const raw = localStorage.getItem('arcawms_settings_v1');
       if (raw) {
         const parsed = JSON.parse(raw);
+        if (parsed.theme) theme = parsed.theme;
+        if (typeof parsed.unitCount === 'number') unitCount = parsed.unitCount;
+        // Cleanse secrets from settings if previously stored there
         if (parsed.githubToken) {
-          parsed.githubToken = cleanTokenAscii(parsed.githubToken);
+          localStorage.setItem('arcawms_cloud_auth_token', cleanTokenAscii(parsed.githubToken));
+          delete parsed.githubToken;
+          localStorage.setItem('arcawms_settings_v1', JSON.stringify(parsed));
         }
         if (parsed.gistId) {
-          parsed.gistId = cleanGistIdAscii(parsed.gistId);
+          localStorage.setItem('arcawms_cloud_gist_id', cleanGistIdAscii(parsed.gistId));
+          delete parsed.gistId;
+          localStorage.setItem('arcawms_settings_v1', JSON.stringify(parsed));
         }
-        return parsed;
       }
     } catch {}
-    return { theme: 'orzhov', unitCount: 9 };
+
+    const githubToken = cleanTokenAscii(localStorage.getItem('arcawms_cloud_auth_token') || '');
+    const gistId = cleanGistIdAscii(localStorage.getItem('arcawms_cloud_gist_id') || '');
+
+    return { 
+      theme, 
+      unitCount, 
+      githubToken: githubToken || undefined, 
+      gistId: gistId || undefined 
+    };
   }
 
   public updateSettings(settings: Partial<{ theme: string; unitCount?: number; githubToken?: string; gistId?: string }>) {
     const current = this.getSettings();
-    const cleanToken = settings.githubToken !== undefined ? cleanTokenAscii(settings.githubToken) : current.githubToken;
-    const cleanGist = settings.gistId !== undefined ? cleanGistIdAscii(settings.gistId) : current.gistId;
-    const next = { 
-      ...current, 
-      ...settings,
-      githubToken: cleanToken || undefined,
-      gistId: cleanGist || undefined
-    };
+    const nextTheme = settings.theme || current.theme;
+    const nextUnitCount = settings.unitCount !== undefined ? settings.unitCount : current.unitCount;
+
+    // Never store auth credentials in the general settings object
     try {
-      localStorage.setItem('arcawms_settings_v1', JSON.stringify(next));
+      localStorage.setItem('arcawms_settings_v1', JSON.stringify({
+        theme: nextTheme,
+        unitCount: nextUnitCount
+      }));
     } catch {}
+
+    // Store auth credentials in private dedicated storage keys
+    if (settings.githubToken !== undefined) {
+      const cleanToken = cleanTokenAscii(settings.githubToken);
+      if (cleanToken) {
+        localStorage.setItem('arcawms_cloud_auth_token', cleanToken);
+      } else {
+        localStorage.removeItem('arcawms_cloud_auth_token');
+      }
+    }
+
+    if (settings.gistId !== undefined) {
+      const cleanGist = cleanGistIdAscii(settings.gistId);
+      if (cleanGist) {
+        localStorage.setItem('arcawms_cloud_gist_id', cleanGist);
+      } else {
+        localStorage.removeItem('arcawms_cloud_gist_id');
+      }
+    }
+
     this.touchUpdated();
     this.notify();
   }
@@ -2068,12 +2104,13 @@ class ArcaDatabase {
   }
 
   public exportJSON(): string {
+    const { githubToken, gistId, ...safeSettings } = this.getSettings();
     return JSON.stringify({
       cards: Array.from(this.cards.values()),
       instances: Array.from(this.instances.values()),
       custom_lists: Array.from(this.customLists.values()),
       history: this.history,
-      settings: this.getSettings(),
+      settings: safeSettings,
       last_updated: this.lastUpdated,
       exported_at: new Date().toISOString()
     }, null, 2);

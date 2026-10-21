@@ -442,12 +442,14 @@ class SyncClient {
   private async pushCurrentState(broadcastMutation = true) {
     this.setUploadState('syncing');
 
+    const { githubToken, gistId, ...safeSettings } = db.getSettings();
+
     const payload = {
       instances: db.getAllInstances(),
       cards: db.getAllCards(),
       custom_lists: db.getCustomLists(),
       history: db.getHistory(),
-      settings: db.getSettings(),
+      settings: safeSettings,
       timestamp: db.getLastUpdated()
     };
 

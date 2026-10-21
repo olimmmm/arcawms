@@ -144,6 +144,12 @@ async function saveGistStore(data: any, req?: any): Promise<boolean> {
   if (!gistId) return false;
 
   try {
+    // SECURITY: Ensure no secrets or tokens are ever written to the Gist store!
+    if (data && typeof data === 'object' && data.settings && typeof data.settings === 'object') {
+      const { githubToken, gistId: _gId, token, ...safeSettings } = data.settings;
+      data.settings = safeSettings;
+    }
+
     const body = JSON.stringify({
       description: GIST_DESCRIPTION,
       files: {
