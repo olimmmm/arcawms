@@ -148,10 +148,14 @@ export const SettingsSyncModal: React.FC<SettingsSyncModalProps> = ({
           syncClient.flushImmediate();
         } else {
           playSound('error');
-          setCloudMessage({ type: 'error', text: 'Token empty or invalid. Local memory mode active.' });
+          setCloudMessage({ 
+            type: 'error', 
+            text: data.error ? `GitHub error: ${data.error}` : 'Token empty or invalid. Local memory mode active.' 
+          });
         }
       } else {
-        setCloudMessage({ type: 'error', text: 'Failed to contact sync status API.' });
+        const errText = await res.text().catch(() => '');
+        setCloudMessage({ type: 'error', text: `Sync API returned status ${res.status}${errText ? `: ${errText.slice(0, 80)}` : ''}` });
       }
     } catch (err: any) {
       playSound('error');
