@@ -4,12 +4,25 @@ const GIST_DESCRIPTION = 'ArcaWMS Cloud Storage Backup (Do not delete)';
 
 let cachedGistId: string | null = (process.env.GIST_ID || '').trim() || null;
 
-function getToken(): string {
+export function getToken(req?: any): string {
+  const auth = req?.headers?.authorization || req?.headers?.Authorization;
+  if (auth && typeof auth === 'string' && auth.startsWith('Bearer ')) {
+    const extracted = auth.substring(7).trim();
+    if (extracted) return extracted;
+  }
   return (process.env.GITHUB_TOKEN || process.env.GITHUB_GIST_TOKEN || '').trim();
 }
 
-function getHeaders(): Record<string, string> {
-  const token = getToken();
+export function getCustomGistId(req?: any): string | null {
+  const headerId = req?.headers?.['x-gist-id'];
+  if (headerId && typeof headerId === 'string' && headerId.trim()) {
+    return headerId.trim();
+  }
+  return (process.env.GIST_ID || '').trim() || null;
+}
+
+function getHeaders(req?: any): Record<string, string> {
+  const token = getToken(req);
   return {
     'Authorization': `Bearer ${token}`,
     'Accept': 'application/vnd.github+json',
@@ -18,17 +31,19 @@ function getHeaders(): Record<string, string> {
   };
 }
 
-export function isGistConfigured(): boolean {
-  return Boolean(getToken());
+export function isGistConfigured(req?: any): boolean {
+  return Boolean(getToken(req));
 }
 
-export async function getGistId(): Promise<string | null> {
+export async function getGistId(req?: any): Promise<string | null> {
+  const customId = getCustomGistId(req);
+  if (customId) return customId;
   if (cachedGistId) return cachedGistId;
-  if (!isGistConfigured()) return null;
+  if (!isGistConfigured(req)) return null;
 
   try {
     const listRes = await fetch(`${GITHUB_API_URL}/gists?per_page=100`, {
-      headers: getHeaders()
+      headers: getHeaders(req)
     });
 
     if (listRes.ok) {
@@ -45,7 +60,7 @@ export async function getGistId(): Promise<string | null> {
     // Create if not found
     const createRes = await fetch(`${GITHUB_API_URL}/gists`, {
       method: 'POST',
-      headers: getHeaders(),
+      headers: getHeaders(req),
       body: JSON.stringify({
         description: GIST_DESCRIPTION,
         public: false,
@@ -73,13 +88,13 @@ export async function getGistId(): Promise<string | null> {
   return null;
 }
 
-export async function loadGistStore(): Promise<any | null> {
-  const gistId = await getGistId();
+export async function loadGistStore(req?: any): Promise<any | null> {
+  const gistId = await getGistId(req);
   if (!gistId) return null;
 
   try {
     const res = await fetch(`${GITHUB_API_URL}/gists/${gistId}`, {
-      headers: getHeaders()
+      headers: getHeaders(req)
     });
 
     if (!res.ok) return null;
@@ -90,7 +105,7 @@ export async function loadGistStore(): Promise<any | null> {
 
     let content = file.content;
     if (file.truncated && file.raw_url) {
-      const rawRes = await fetch(file.raw_url, { headers: getHeaders() });
+      const rawRes = await fetch(file.raw_url, { headers: getHeaders(req) });
       if (rawRes.ok) content = await rawRes.text();
     }
 
@@ -103,8 +118,8 @@ export async function loadGistStore(): Promise<any | null> {
   return null;
 }
 
-export async function saveGistStore(data: any): Promise<boolean> {
-  const gistId = await getGistId();
+export async function saveGistStore(data: any, req?: any): Promise<boolean> {
+  const gistId = await getGistId(req);
   if (!gistId) return false;
 
   try {
@@ -119,7 +134,7 @@ export async function saveGistStore(data: any): Promise<boolean> {
 
     const res = await fetch(`${GITHUB_API_URL}/gists/${gistId}`, {
       method: 'PATCH',
-      headers: getHeaders(),
+      headers: getHeaders(req),
       body
     });
 
@@ -130,11 +145,20 @@ export async function saveGistStore(data: any): Promise<boolean> {
   }
 }
 
-export async function getGistMeta(): Promise<{ timestamp: number; count: number }> {
-  const store = await loadGistStore();
-  if (!store) return { timestamp: 0, count: 0 };
+export async function getGistMeta(req?: any): Promise<{ timestamp: number; count: number; configured: boolean; gistId: string | null }> {
+  const configured = isGistConfigured(req);
+  const gistId = await getGistId(req);
+  if (!configured || !gistId) {
+    return { timestamp: 0, count: 0, configured: false, gistId: null };
+  }
+  const store = await loadGistStore(req);
+  if (!store) {
+    return { timestamp: 0, count: 0, configured: true, gistId };
+  }
   return {
     timestamp: store.timestamp || store.last_updated || 0,
-    count: Array.isArray(store.instances) ? store.instances.length : 0
+    count: Array.isArray(store.instances) ? store.instances.length : 0,
+    configured: true,
+    gistId
   };
 }

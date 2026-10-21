@@ -18,10 +18,14 @@ import {
   Plus,
   Minus,
   CheckCircle2,
-  Loader2
+  Loader2,
+  Key,
+  ExternalLink,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 import { db } from '../services/db';
-import { syncClient } from '../services/sync';
+import { syncClient, getSyncHeaders } from '../services/sync';
 import { playSound } from '../services/audio';
 import { GUILD_THEMES, GuildThemeId, applyTheme, getActiveTheme } from '../services/theme';
 import { enrichMissingCards, subscribeEnrichProgress, getCurrentEnrichProgress, EnrichProgressState } from '../services/scryfall';
@@ -70,16 +74,91 @@ export const SettingsSyncModal: React.FC<SettingsSyncModalProps> = ({
   const [resolutionStats, setResolutionStats] = useState(() => calculateResolutionStats());
   const [enrichProgress, setEnrichProgress] = useState<EnrichProgressState>(() => getCurrentEnrichProgress());
   const [cloudStatus, setCloudStatus] = useState<{ configured: boolean; gistId: string | null } | null>(null);
+  const [githubTokenInput, setGithubTokenInput] = useState<string>(() => db.getSettings().githubToken || '');
+  const [gistIdInput, setGistIdInput] = useState<string>(() => db.getSettings().gistId || '');
+  const [showTokenSettings, setShowTokenSettings] = useState<boolean>(() => !db.getSettings().githubToken);
+  const [showPassword, setShowPassword] = useState<boolean>(false);
+  const [isSavingCloud, setIsSavingCloud] = useState<boolean>(false);
+  const [cloudMessage, setCloudMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const fetchCloudStatus = async () => {
+    try {
+      const res = await fetch('/api/sync/cloud-status', { headers: getSyncHeaders() });
+      if (res.ok) {
+        const data = await res.json();
+        setCloudStatus(data);
+      } else {
+        setCloudStatus(null);
+      }
+    } catch {
+      setCloudStatus(null);
+    }
+  };
 
   useEffect(() => {
     if (isOpen) {
-      fetch('/api/sync/cloud-status')
-        .then(r => r.json())
-        .then(data => setCloudStatus(data))
-        .catch(() => setCloudStatus(null));
+      fetchCloudStatus();
+      const settings = db.getSettings();
+      setGithubTokenInput(settings.githubToken || '');
+      setGistIdInput(settings.gistId || '');
+      setShowTokenSettings(!settings.githubToken);
     }
   }, [isOpen]);
+
+  const handleSaveCloudSettings = async () => {
+    playSound('click');
+    setIsSavingCloud(true);
+    setCloudMessage({ type: 'info', text: 'Validating token & connecting to GitHub Gist...' });
+
+    const cleanToken = githubTokenInput.trim();
+    const cleanGistId = gistIdInput.trim();
+
+    db.updateSettings({
+      githubToken: cleanToken || undefined,
+      gistId: cleanGistId || undefined
+    });
+
+    try {
+      const res = await fetch('/api/sync/cloud-status', { headers: getSyncHeaders() });
+      if (res.ok) {
+        const data = await res.json();
+        setCloudStatus(data);
+        if (data.configured) {
+          playSound('success');
+          setCloudMessage({ 
+            type: 'success', 
+            text: `Connected! Using Gist ${data.gistId ? `${data.gistId.slice(0, 8)}...` : 'active'}` 
+          });
+          syncClient.forceReconnect();
+          syncClient.flushImmediate();
+        } else {
+          playSound('error');
+          setCloudMessage({ type: 'error', text: 'Token empty or invalid. Local memory mode active.' });
+        }
+      } else {
+        setCloudMessage({ type: 'error', text: 'Failed to contact sync status API.' });
+      }
+    } catch (err: any) {
+      playSound('error');
+      setCloudMessage({ type: 'error', text: `Connection error: ${err.message}` });
+    } finally {
+      setIsSavingCloud(false);
+      setTimeout(() => setCloudMessage(null), 6000);
+    }
+  };
+
+  const handleDisconnectCloud = () => {
+    if (window.confirm('Disconnect cloud token? The app will operate in local offline memory mode.')) {
+      playSound('click');
+      setGithubTokenInput('');
+      setGistIdInput('');
+      db.updateSettings({ githubToken: undefined, gistId: undefined });
+      setCloudStatus({ configured: false, gistId: null });
+      setCloudMessage({ type: 'info', text: 'Cloud credentials cleared. Local memory active.' });
+      setTimeout(() => setCloudMessage(null), 4000);
+    }
+  };
 
   const handleRefreshMetadata = async () => {
     playSound('click');
@@ -203,6 +282,33 @@ export const SettingsSyncModal: React.FC<SettingsSyncModalProps> = ({
       setExportFeedback({
         type: 'error',
         message: `Failed to export CSV: ${err.message}`
+      });
+    }
+  };
+
+  const handleExportListsCSV = () => {
+    try {
+      playSound('click');
+      const csvStr = db.exportCustomListsCSV();
+      const fileName = `arcawms-custom-lists-${new Date().toISOString().split('T')[0]}.csv`;
+      const blob = new Blob([csvStr], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      a.click();
+      URL.revokeObjectURL(url);
+      playSound('success');
+      setExportFeedback({
+        type: 'success',
+        message: `Successfully generated and downloaded ${fileName}`
+      });
+      setTimeout(() => setExportFeedback(null), 6000);
+    } catch (err: any) {
+      playSound('error');
+      setExportFeedback({
+        type: 'error',
+        message: `Failed to export Lists CSV: ${err.message}`
       });
     }
   };
@@ -386,7 +492,7 @@ export const SettingsSyncModal: React.FC<SettingsSyncModalProps> = ({
             <span className="text-[10px] font-mono text-slate-400">Offline & Export</span>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
             {/* JSON Export */}
             <button
               onClick={handleExportJSON}
@@ -394,17 +500,27 @@ export const SettingsSyncModal: React.FC<SettingsSyncModalProps> = ({
             >
               <Download className="h-4 w-4 text-theme-primary" />
               <span className="font-bold">Export JSON</span>
-              <span className="text-[10px] text-slate-500">Full system backup</span>
+              <span className="text-[10px] text-slate-500">Full Raw Backup</span>
             </button>
 
-            {/* CSV Export */}
+            {/* CSV Collection Export */}
             <button
               onClick={handleExportCSV}
               className="p-3 rounded-xl bg-slate-950/90 hover:bg-slate-800 text-xs font-medium text-slate-200 flex flex-col items-center justify-center gap-1.5 border border-slate-800 hover:border-slate-700 transition cursor-pointer"
             >
               <FileSpreadsheet className="h-4 w-4 text-emerald-400" />
               <span className="font-bold">Export CSV</span>
-              <span className="text-[10px] text-slate-500">Universal spreadsheet</span>
+              <span className="text-[10px] text-slate-500">Full Collection</span>
+            </button>
+
+            {/* Custom Lists CSV Export */}
+            <button
+              onClick={handleExportListsCSV}
+              className="p-3 rounded-xl bg-slate-950/90 hover:bg-slate-800 text-xs font-medium text-slate-200 flex flex-col items-center justify-center gap-1.5 border border-slate-800 hover:border-slate-700 transition cursor-pointer"
+            >
+              <FileSpreadsheet className="h-4 w-4 text-purple-400" />
+              <span className="font-bold">Export Lists</span>
+              <span className="text-[10px] text-slate-500">Custom Lists CSV</span>
             </button>
 
             {/* JSON Import */}
@@ -608,29 +724,158 @@ export const SettingsSyncModal: React.FC<SettingsSyncModalProps> = ({
             </p>
           </div>
 
-          {/* Cloud Persistence Indicator */}
-          <div className="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800 space-y-1">
+          {/* Cloud Persistence Indicator & In-App Token Setup */}
+          <div className="p-3.5 rounded-xl bg-slate-950/80 border border-slate-800 space-y-2.5">
             <div className="flex items-center justify-between text-xs">
-              <span className="text-slate-400 font-mono flex items-center gap-1.5">
+              <span className="text-slate-300 font-mono font-bold flex items-center gap-1.5">
                 <ShieldCheck className="h-4 w-4 text-theme-primary" />
                 <span>Cloud Bedrock (Persistence):</span>
               </span>
               {cloudStatus?.configured ? (
-                <span className="text-emerald-400 font-mono font-bold flex items-center gap-1 text-[11px]">
+                <span className="text-emerald-400 font-mono font-bold flex items-center gap-1 text-[11px] bg-emerald-950/60 px-2 py-0.5 rounded border border-emerald-800/80">
                   <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
                   <span>GitHub Gist Active</span>
                 </span>
               ) : (
-                <span className="text-amber-400 font-mono text-[11px] flex items-center gap-1">
+                <span className="text-amber-400 font-mono text-[11px] flex items-center gap-1 bg-amber-950/60 px-2 py-0.5 rounded border border-amber-800/80 font-bold">
                   <span>Local Memory Only</span>
                 </span>
               )}
             </div>
-            <p className="text-[10px] text-slate-500">
+
+            <p className="text-[11px] text-slate-400">
               {cloudStatus?.configured 
-                ? `Permanent cloud backup linked to your GitHub account (Gist ${cloudStatus.gistId ? `${cloudStatus.gistId.slice(0, 8)}...` : 'active'}). Database will never reset when server sleeps.`
-                : 'Server resets to local backup when sleeping. To enable permanent 24/7 cloud persistence, set GITHUB_TOKEN in your Render environment variables.'}
+                ? (
+                  <span>
+                    Permanent cloud backup active via GitHub Gist ({cloudStatus.gistId ? `${cloudStatus.gistId.slice(0, 10)}...` : 'connected'}). Real-time updates automatically mirror to your personal GitHub account.
+                  </span>
+                ) : (
+                  <span>
+                    Your collection is currently saved in local browser storage. Connect a GitHub Personal Access Token below to enable permanent, free 24/7 cloud sync across your devices.
+                  </span>
+                )}
             </p>
+
+            {cloudStatus?.gistId && (
+              <div className="pt-1 flex items-center gap-2 text-[11px]">
+                <a
+                  href={`https://gist.github.com/${cloudStatus.gistId}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-theme-primary hover:underline font-mono"
+                >
+                  <ExternalLink className="h-3 w-3" />
+                  <span>View Raw Gist Backup on GitHub</span>
+                </a>
+              </div>
+            )}
+
+            {/* Toggle Token Configuration Section */}
+            <div className="pt-1 border-t border-slate-850">
+              <button
+                type="button"
+                onClick={() => setShowTokenSettings(!showTokenSettings)}
+                className="text-[11px] font-mono text-slate-400 hover:text-white flex items-center gap-1.5 transition cursor-pointer py-1"
+              >
+                <Key className="h-3.5 w-3.5 text-theme-primary" />
+                <span>{showTokenSettings ? 'Hide Cloud Token Configuration' : 'Configure GitHub Token / Gist'}</span>
+              </button>
+
+              {showTokenSettings && (
+                <div className="mt-2.5 p-3 rounded-lg bg-slate-900 border border-slate-800 space-y-2.5 animate-in fade-in duration-200">
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-mono uppercase text-slate-400 flex items-center justify-between">
+                      <span>GitHub Personal Access Token:</span>
+                      <a 
+                        href="https://github.com/settings/tokens" 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="text-theme-primary hover:underline flex items-center gap-1 lowercase"
+                      >
+                        generate token <ExternalLink className="h-2.5 w-2.5" />
+                      </a>
+                    </label>
+                    <div className="relative">
+                      <input
+                        type={showPassword ? 'text' : 'password'}
+                        value={githubTokenInput}
+                        onChange={(e) => setGithubTokenInput(e.target.value)}
+                        placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
+                        className="w-full px-3 py-1.5 pr-9 rounded-lg bg-slate-950 border border-slate-700 text-xs text-white font-mono placeholder:text-slate-600 focus:outline-none focus:border-theme-primary"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword(!showPassword)}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 cursor-pointer"
+                        title={showPassword ? 'Hide token' : 'Show token'}
+                      >
+                        {showPassword ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                      </button>
+                    </div>
+                    <span className="text-[10px] text-slate-500 block">
+                      Token only requires the <strong>gist</strong> permission scope.
+                    </span>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-mono uppercase text-slate-400">
+                      Gist ID (Optional — leave blank to auto-create):
+                    </label>
+                    <input
+                      type="text"
+                      value={gistIdInput}
+                      onChange={(e) => setGistIdInput(e.target.value)}
+                      placeholder="e.g. 7f9a1b2c3d4e5f6..."
+                      className="w-full px-3 py-1.5 rounded-lg bg-slate-950 border border-slate-700 text-xs text-white font-mono placeholder:text-slate-600 focus:outline-none focus:border-theme-primary"
+                    />
+                  </div>
+
+                  <div className="flex items-center gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={handleSaveCloudSettings}
+                      disabled={isSavingCloud}
+                      className="flex-1 py-1.5 px-3 rounded-lg bg-theme-primary hover:bg-theme-accent text-slate-950 font-bold text-xs font-mono transition flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                    >
+                      {isSavingCloud ? (
+                        <>
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          <span>Saving & Connecting...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Check className="h-3.5 w-3.5" />
+                          <span>Save & Link Cloud Bedrock</span>
+                        </>
+                      )}
+                    </button>
+
+                    {db.getSettings().githubToken && (
+                      <button
+                        type="button"
+                        onClick={handleDisconnectCloud}
+                        className="py-1.5 px-3 rounded-lg bg-rose-950/60 hover:bg-rose-900/60 text-rose-300 border border-rose-800/60 text-xs font-mono transition cursor-pointer"
+                        title="Disconnect token"
+                      >
+                        Disconnect
+                      </button>
+                    )}
+                  </div>
+
+                  {cloudMessage && (
+                    <div className={`p-2 rounded text-xs font-mono ${
+                      cloudMessage.type === 'success' 
+                        ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-800' 
+                        : cloudMessage.type === 'error'
+                        ? 'bg-rose-950/80 text-rose-300 border border-rose-800'
+                        : 'bg-slate-800 text-slate-300'
+                    }`}>
+                      {cloudMessage.text}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
 
           <button

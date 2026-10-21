@@ -18,7 +18,8 @@ import {
   HelpCircle,
   CheckCircle2,
   FolderPlus,
-  ArrowUpDown
+  ArrowUpDown,
+  FileSpreadsheet
 } from 'lucide-react';
 import { db } from '../services/db';
 import { CustomList, CustomListItem, CardInstance, ScryfallCard } from '../types';
@@ -357,6 +358,29 @@ export const CustomListView: React.FC<CustomListViewProps> = ({ onNavigateToPick
     showToast(`Copied ${activeList.items.length} cards to clipboard!`);
   };
 
+  // Export list formatted as CSV
+  const handleExportCSV = () => {
+    if (!activeList || activeList.items.length === 0) return;
+    try {
+      playSound('click');
+      const csvStr = db.exportCustomListsCSV(activeList.id);
+      const safeName = activeList.name.toLowerCase().replace(/[^a-z0-9_-]/g, '-');
+      const fileName = `arcawms-list-${safeName}-${new Date().toISOString().split('T')[0]}.csv`;
+      const blob = new Blob([csvStr], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      a.click();
+      URL.revokeObjectURL(url);
+      triggerHaptic('light');
+      showToast(`Exported ${fileName}`);
+    } catch (err: any) {
+      playSound('error');
+      showToast(`Export failed: ${err.message}`);
+    }
+  };
+
   // Send list directly to Pick-Path
   const handleSendToPickPath = () => {
     if (!activeList || activeList.items.length === 0) return;
@@ -554,6 +578,17 @@ export const CustomListView: React.FC<CustomListViewProps> = ({ onNavigateToPick
               >
                 <Copy className="h-3.5 w-3.5" />
                 <span>Copy to Clipboard</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleExportCSV}
+                disabled={activeList.items.length === 0}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-950/60 hover:bg-emerald-900/60 text-emerald-400 text-xs font-semibold border border-emerald-800/80 transition disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer shadow-sm"
+                title="Export this list as a CSV file"
+              >
+                <FileSpreadsheet className="h-3.5 w-3.5" />
+                <span>Export CSV</span>
               </button>
 
               <button

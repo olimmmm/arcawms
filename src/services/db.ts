@@ -436,6 +436,9 @@ class ArcaDatabase {
   public rebuildIndexes() {
     this.cardsByName.clear();
     for (const card of this.cards.values()) {
+      if (card.price_eur > 0 && card.image_url_normal && card.image_url_normal.startsWith('https://cards.scryfall.io')) {
+        card.is_smart_resolved = true;
+      }
       this.updateCardNameIndex(card);
     }
     this.instancesByName.clear();
@@ -1065,6 +1068,9 @@ class ArcaDatabase {
       });
 
       const canonical = cardList[0];
+      if (canonical.price_eur > 0 && canonical.image_url_normal && canonical.image_url_normal.startsWith('https://cards.scryfall.io')) {
+        canonical.is_smart_resolved = true;
+      }
       this.cardsByName.set(name, canonical);
 
       // Remove stale/dummy duplicate cards
@@ -1846,8 +1852,19 @@ class ArcaDatabase {
   public exportCSV(): string {
     const instances = this.getAllInstances();
     const rows = [
-      ['Card Name', 'State', 'Drawer Location', 'Is Proxy', 'For Sale', 'Mana Cost', 'CMC', 'Type Line', 'Price EUR', 'Oracle ID']
+      ['Card Name', 'State', 'Drawer Location', 'Is Proxy', 'For Sale', 'In Custom Lists', 'Mana Cost', 'CMC', 'Type Line', 'Price EUR', 'Oracle ID']
     ];
+
+    const listMembership = new Map<string, string[]>();
+    for (const list of this.customLists.values()) {
+      for (const item of list.items) {
+        const key = item.card_name.trim().toLowerCase();
+        if (!listMembership.has(key)) listMembership.set(key, []);
+        if (!listMembership.get(key)!.includes(list.name)) {
+          listMembership.get(key)!.push(list.name);
+        }
+      }
+    }
 
     for (const inst of instances) {
       const meta = this.getCard(inst.card_name) || this.getCard(inst.oracle_id);
@@ -1856,6 +1873,7 @@ class ArcaDatabase {
       const stateLabel = inst.state === 'A'
         ? 'Chaos Drawers'
         : (inst.state === 'P' ? 'Proxy Box' : 'Decks / Brewing');
+      const inLists = listMembership.get(inst.card_name.trim().toLowerCase())?.join('; ') || 'None';
 
       rows.push([
         `"${inst.card_name.replace(/"/g, '""')}"`,
@@ -1863,12 +1881,40 @@ class ArcaDatabase {
         inst.location_id || (inst.state === 'P' ? 'Proxy Box' : 'Diffused / In Decks'),
         isProxy ? 'Yes' : 'No',
         inst.is_for_sale ? 'Yes' : 'No',
+        `"${inLists.replace(/"/g, '""')}"`,
         `"${meta?.mana_cost || ''}"`,
         String(meta?.cmc ?? ''),
         `"${(meta?.type_line || '').replace(/"/g, '""')}"`,
         price,
         inst.oracle_id || ''
       ]);
+    }
+
+    return rows.map(r => r.join(',')).join('\n');
+  }
+
+  public exportCustomListsCSV(listId?: string): string {
+    const lists = listId ? [this.customLists.get(listId)].filter(Boolean) as CustomList[] : Array.from(this.customLists.values());
+    const rows = [
+      ['List Name', 'Card Name', 'Quantity', 'Notes', 'Mana Cost', 'CMC', 'Type Line', 'Price EUR', 'Oracle ID']
+    ];
+
+    for (const list of lists) {
+      for (const item of list.items) {
+        const meta = this.getCard(item.card_name) || (item.oracle_id ? this.getCard(item.oracle_id) : undefined);
+        const price = meta?.price_eur ? meta.price_eur.toFixed(2) : '0.00';
+        rows.push([
+          `"${list.name.replace(/"/g, '""')}"`,
+          `"${item.card_name.replace(/"/g, '""')}"`,
+          String(item.count || 1),
+          `"${(item.notes || '').replace(/"/g, '""')}"`,
+          `"${meta?.mana_cost || ''}"`,
+          String(meta?.cmc ?? ''),
+          `"${(meta?.type_line || '').replace(/"/g, '""')}"`,
+          price,
+          item.oracle_id || meta?.oracle_id || ''
+        ]);
+      }
     }
 
     return rows.map(r => r.join(',')).join('\n');
@@ -1930,7 +1976,7 @@ class ArcaDatabase {
     }
   }
 
-  public getSettings(): { theme: string; unitCount?: number } {
+  public getSettings(): { theme: string; unitCount?: number; githubToken?: string; gistId?: string } {
     try {
       const raw = localStorage.getItem('arcawms_settings_v1');
       if (raw) return JSON.parse(raw);
@@ -1938,7 +1984,7 @@ class ArcaDatabase {
     return { theme: 'orzhov', unitCount: 9 };
   }
 
-  public updateSettings(settings: Partial<{ theme: string; unitCount?: number }>) {
+  public updateSettings(settings: Partial<{ theme: string; unitCount?: number; githubToken?: string; gistId?: string }>) {
     const current = this.getSettings();
     const next = { ...current, ...settings };
     try {
@@ -2091,6 +2137,10 @@ class ArcaDatabase {
         data.cards.forEach((c: any) => {
           if (c && typeof c === 'object' && (c.oracle_id || c.name)) {
             const oracleId = c.oracle_id || generateUUID();
+            const isSmartResolved = Boolean(
+              c.is_smart_resolved || 
+              (c.price_eur > 0 && c.image_url_normal && c.image_url_normal.startsWith('https://cards.scryfall.io'))
+            );
             this.cards.set(oracleId, {
               oracle_id: oracleId,
               name: String(c.name || '').trim(),
@@ -2102,7 +2152,8 @@ class ArcaDatabase {
               rarity: c.rarity || 'common',
               image_url_normal: c.image_url_normal || '',
               price_eur: typeof c.price_eur === 'number' ? c.price_eur : 0,
-              oracle_text: c.oracle_text
+              oracle_text: c.oracle_text,
+              is_smart_resolved: isSmartResolved
             });
           }
         });

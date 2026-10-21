@@ -20,6 +20,18 @@ const CLIENT_ID = typeof crypto !== 'undefined' && crypto.randomUUID
   ? crypto.randomUUID() 
   : 'client-' + Math.random().toString(36).substring(2, 10);
 
+export function getSyncHeaders(): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  const settings = db.getSettings();
+  if (settings.githubToken) {
+    headers['Authorization'] = `Bearer ${settings.githubToken.trim()}`;
+  }
+  if (settings.gistId) {
+    headers['x-gist-id'] = settings.gistId.trim();
+  }
+  return headers;
+}
+
 class SyncClient {
   private ws: WebSocket | null = null;
   private status: SyncStatus = 'disconnected';
@@ -92,7 +104,7 @@ class SyncClient {
     try {
       await db.whenHydrated();
       // Bandwidth optimization: check lightweight metadata (~50B) first instead of downloading full store (MBs)
-      const res = await fetch('/api/sync/meta');
+      const res = await fetch('/api/sync/meta', { headers: getSyncHeaders() });
       if (res.ok) {
         const meta = await res.json();
         const localTs = parseTimestamp(db.getLastUpdated());
@@ -107,7 +119,7 @@ class SyncClient {
 
         // Only download full JSON store if server is actually newer!
         if (remoteTs > localTs) {
-          const storeRes = await fetch('/api/sync/store');
+          const storeRes = await fetch('/api/sync/store', { headers: getSyncHeaders() });
           if (storeRes.ok) {
             const data = await storeRes.json();
             if (data?.store) {
@@ -428,7 +440,7 @@ class SyncClient {
         });
         const res = await fetch('/api/sync/store', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: getSyncHeaders(),
           body
         });
         if (res.ok) {
