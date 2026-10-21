@@ -15,6 +15,7 @@ export class GistStoreService {
   private isSaving = false;
   private pendingPayload: any = null;
   private initialized = false;
+  private lastSavedTimestamp = 0;
 
   constructor() {
     this.token = (process.env.GITHUB_TOKEN || process.env.GITHUB_GIST_TOKEN || '').trim();
@@ -160,6 +161,12 @@ export class GistStoreService {
     await this.init();
     if (!this.gistId) return false;
 
+    // Skip redundant uploads if timestamp has not changed
+    const ts = data?.timestamp || data?.last_updated || 0;
+    if (ts > 0 && ts === this.lastSavedTimestamp) {
+      return true;
+    }
+
     if (this.isSaving) {
       this.pendingPayload = data;
       return true;
@@ -167,11 +174,12 @@ export class GistStoreService {
 
     this.isSaving = true;
     try {
+      // Minify JSON to minimize bandwidth (no null, 2 indentation)
       const body = JSON.stringify({
         description: GIST_DESCRIPTION,
         files: {
           [GIST_FILENAME]: {
-            content: JSON.stringify(data, null, 2)
+            content: JSON.stringify(data)
           }
         }
       });
@@ -183,6 +191,7 @@ export class GistStoreService {
       });
 
       if (res.ok) {
+        this.lastSavedTimestamp = ts;
         console.log(`[GistStore] Successfully saved backup to GitHub Gist (${data.instances?.length || 0} cards).`);
         return true;
       } else {

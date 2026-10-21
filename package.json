@@ -11,10 +11,17 @@
     "build": "tsc && vite build",
     "preview": "vite preview --host --port 5173"
   },
-  "keywords": ["mtg", "wms", "chaos-sorting", "warehouse-management", "magic-the-gathering"],
+  "keywords": [
+    "mtg",
+    "wms",
+    "chaos-sorting",
+    "warehouse-management",
+    "magic-the-gathering"
+  ],
   "license": "MIT",
   "dependencies": {
     "clsx": "^2.1.1",
+    "compression": "^1.8.2",
     "cors": "^2.8.6",
     "express": "^5.2.1",
     "lucide-react": "^1.52.0",
@@ -26,6 +33,7 @@
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.0.0",
+    "@types/compression": "^1.8.1",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/node": "^26.6.4",

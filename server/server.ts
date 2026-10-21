@@ -2,6 +2,7 @@ import express from 'express';
 import { createServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import cors from 'cors';
+import compression from 'compression';
 import os from 'os';
 import fs from 'fs';
 import path from 'path';
@@ -9,6 +10,7 @@ import { gistStore } from './gistStore';
 
 const PORT = process.env.PORT || 3001;
 const app = express();
+app.use(compression());
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
@@ -111,7 +113,12 @@ process.on('beforeExit', () => { flushStoreSync(); });
 
 loadStore();
 
-// Health endpoint
+// Ultra-lightweight health endpoint for Render health checks (avoids serving HTML index)
+app.get('/health', (req, res) => {
+  res.status(200).send('OK');
+});
+
+// Detailed health endpoint
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
@@ -131,6 +138,14 @@ app.get('/api/sync/cloud-status', (req, res) => {
     type: gistStore.isConfigured() ? 'github_gist' : 'local_only',
     configured: gistStore.isConfigured(),
     gistId: gistStore.getGistId()
+  });
+});
+
+// Ultra-lightweight sync metadata endpoint (exchanges ~50 bytes instead of megabytes of JSON)
+app.get('/api/sync/meta', (req, res) => {
+  res.json({
+    timestamp: currentStore?.timestamp || currentStore?.last_updated || 0,
+    count: Array.isArray(currentStore?.instances) ? currentStore.instances.length : 0
   });
 });
 
@@ -229,19 +244,25 @@ function broadcast(msg: any, senderWs?: WebSocket) {
 wss.on('connection', (ws) => {
   console.log(`[SyncServer] Client connected. (Active: ${wss.clients.size})`);
 
-  // Send current store if available (timestamp reflects stored data, never Date.now())
-  if (currentStore) {
-    ws.send(JSON.stringify({
-      type: 'SYNC_FULL_STATE',
-      payload: currentStore,
-      timestamp: currentStore.timestamp || 0
-    }));
-  }
+  // Send lightweight handshake (~50 bytes) instead of blasting full store (megabytes)
+  ws.send(JSON.stringify({
+    type: 'SYNC_HANDSHAKE',
+    timestamp: currentStore?.timestamp || currentStore?.last_updated || 0,
+    count: Array.isArray(currentStore?.instances) ? currentStore.instances.length : 0
+  }));
 
   ws.on('message', (message) => {
     try {
       const parsed = JSON.parse(message.toString());
-      if (parsed.type === 'STATE_UPDATE' && parsed.payload) {
+      if (parsed.type === 'REQUEST_FULL_STATE') {
+        if (currentStore) {
+          ws.send(JSON.stringify({
+            type: 'SYNC_FULL_STATE',
+            payload: currentStore,
+            timestamp: currentStore.timestamp || 0
+          }));
+        }
+      } else if (parsed.type === 'STATE_UPDATE' && parsed.payload) {
         saveStore(parsed.payload);
         broadcast(parsed, ws);
       } else if (parsed.type === 'PING') {

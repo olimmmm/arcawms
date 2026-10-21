@@ -31,6 +31,7 @@ class SyncClient {
   private reconnectTimer: any = null;
   private pushDebounceTimer: any = null;
   private syncedResetTimer: any = null;
+  private pingTimer: any = null;
 
   constructor() {
     if (typeof window !== 'undefined') {
@@ -86,11 +87,31 @@ class SyncClient {
   private async checkServerStoreHttp() {
     try {
       await db.whenHydrated();
-      const res = await fetch('/api/sync/store');
+      // Bandwidth optimization: check lightweight metadata (~50B) first instead of downloading full store (MBs)
+      const res = await fetch('/api/sync/meta');
       if (res.ok) {
-        const data = await res.json();
-        if (data?.store) {
-          this.reconcileWithServer(data.store);
+        const meta = await res.json();
+        const localTs = parseTimestamp(db.getLastUpdated());
+        const remoteTs = parseTimestamp(meta?.timestamp);
+        const localCount = db.getAllInstances().length;
+        const remoteCount = meta?.count || 0;
+
+        if (localCount >= 50 && remoteCount <= 28) {
+          this.schedulePush(200);
+          return;
+        }
+
+        // Only download full JSON store if server is actually newer!
+        if (remoteTs > localTs) {
+          const storeRes = await fetch('/api/sync/store');
+          if (storeRes.ok) {
+            const data = await storeRes.json();
+            if (data?.store) {
+              this.reconcileWithServer(data.store);
+            }
+          }
+        } else if (localTs > remoteTs) {
+          this.schedulePush(200);
         }
       }
     } catch {
@@ -153,6 +174,7 @@ class SyncClient {
 
       this.ws.onopen = () => {
         this.setStatus('connected');
+        this.startPingKeepAlive();
       };
 
       this.ws.onmessage = (event) => {
@@ -161,8 +183,33 @@ class SyncClient {
           // Ignore echoes of our own client's messages
           if (msg.clientId && msg.clientId === CLIENT_ID) return;
 
-          if (msg.type === 'SYNC_FULL_STATE') {
-            // Passive handshake on WS connect
+          if (msg.type === 'SYNC_HANDSHAKE') {
+            // Lightweight handshake (~50 bytes) received from server
+            db.whenHydrated().then(() => {
+              const localTs = parseTimestamp(db.getLastUpdated());
+              const remoteTs = parseTimestamp(msg.timestamp);
+              const localCount = db.getAllInstances().length;
+              const remoteCount = msg.count || 0;
+
+              // Guard: Cold server container vs established local
+              if (localCount >= 50 && remoteCount <= 28) {
+                this.schedulePush(200);
+                return;
+              }
+
+              if (remoteTs > localTs) {
+                // Server actually has newer cards! Request full state payload
+                if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                  this.ws.send(JSON.stringify({ type: 'REQUEST_FULL_STATE' }));
+                }
+              } else if (localTs > remoteTs) {
+                // Local is newer! Push local collection to server
+                this.schedulePush(200);
+              }
+              // If equal: PERFECT SYNC! 0 bytes downloaded!
+            });
+          } else if (msg.type === 'SYNC_FULL_STATE') {
+            // Full state downloaded on explicit demand
             db.whenHydrated().then(() => {
               this.reconcileWithServer(msg.payload);
             });
@@ -178,16 +225,38 @@ class SyncClient {
       };
 
       this.ws.onclose = () => {
+        this.stopPingKeepAlive();
         this.setStatus('disconnected');
         this.scheduleReconnect();
       };
 
       this.ws.onerror = () => {
+        this.stopPingKeepAlive();
         this.setStatus('error');
       };
     } catch {
+      this.stopPingKeepAlive();
       this.setStatus('disconnected');
       this.scheduleReconnect();
+    }
+  }
+
+  private startPingKeepAlive() {
+    this.stopPingKeepAlive();
+    // 25s ping keeps Render reverse proxy from dropping idle connection (Render timeout is ~55-100s)
+    this.pingTimer = setInterval(() => {
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        try {
+          this.ws.send(JSON.stringify({ type: 'PING' }));
+        } catch {}
+      }
+    }, 25000);
+  }
+
+  private stopPingKeepAlive() {
+    if (this.pingTimer) {
+      clearInterval(this.pingTimer);
+      this.pingTimer = null;
     }
   }
 
@@ -320,6 +389,7 @@ class SyncClient {
     }
 
     // 2. WebSocket push (real-time cross-device)
+    let pushedOverWs = false;
     if (this.ws && this.ws.readyState === WebSocket.OPEN && broadcastMutation) {
       try {
         this.ws.send(JSON.stringify({
@@ -327,22 +397,7 @@ class SyncClient {
           payload,
           clientId: CLIENT_ID
         }));
-      } catch {}
-    }
-
-    // 3. Reliable HTTP POST fallback (no keepalive: true to prevent 64KB Fetch limit rejection on large collections)
-    try {
-      const body = JSON.stringify({ 
-        store: payload, 
-        clientId: CLIENT_ID, 
-        broadcastMutation 
-      });
-      const res = await fetch('/api/sync/store', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body
-      });
-      if (res.ok) {
+        pushedOverWs = true;
         this.setUploadState('synced');
         if (this.syncedResetTimer) clearTimeout(this.syncedResetTimer);
         this.syncedResetTimer = setTimeout(() => {
@@ -350,12 +405,39 @@ class SyncClient {
             this.setUploadState('idle');
           }
         }, 3000);
-      } else {
+      } catch {
+        pushedOverWs = false;
+      }
+    }
+
+    // 3. Reliable HTTP POST fallback: only send if WebSocket is NOT connected, or on explicit unload
+    if (!pushedOverWs) {
+      try {
+        const body = JSON.stringify({ 
+          store: payload, 
+          clientId: CLIENT_ID, 
+          broadcastMutation 
+        });
+        const res = await fetch('/api/sync/store', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body
+        });
+        if (res.ok) {
+          this.setUploadState('synced');
+          if (this.syncedResetTimer) clearTimeout(this.syncedResetTimer);
+          this.syncedResetTimer = setTimeout(() => {
+            if (this.uploadState === 'synced') {
+              this.setUploadState('idle');
+            }
+          }, 3000);
+        } else {
+          this.setUploadState('error');
+        }
+      } catch (err) {
+        console.debug('[SyncClient] Push exception:', err);
         this.setUploadState('error');
       }
-    } catch (err) {
-      console.debug('[SyncClient] Push exception:', err);
-      this.setUploadState('error');
     }
   }
 
