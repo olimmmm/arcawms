@@ -32,6 +32,7 @@ class SyncClient {
   private pushDebounceTimer: any = null;
   private syncedResetTimer: any = null;
   private pingTimer: any = null;
+  private wsFailCount = 0;
 
   constructor() {
     if (typeof window !== 'undefined') {
@@ -79,6 +80,9 @@ class SyncClient {
       document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'hidden') {
           flushOnUnload();
+        } else if (document.visibilityState === 'visible') {
+          // Re-check cloud store on window focus for instant cross-device sync
+          this.checkServerStoreHttp();
         }
       });
     }
@@ -173,6 +177,7 @@ class SyncClient {
       this.ws = new WebSocket(wsUrl);
 
       this.ws.onopen = () => {
+        this.wsFailCount = 0;
         this.setStatus('connected');
         this.startPingKeepAlive();
       };
@@ -262,9 +267,12 @@ class SyncClient {
 
   private scheduleReconnect() {
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.wsFailCount++;
+    // If WebSockets are unavailable (e.g. running on Vercel serverless), back off to 60s
+    const delay = this.wsFailCount > 3 ? 60000 : 5000;
     this.reconnectTimer = setTimeout(() => {
       this.connect();
-    }, 5000);
+    }, delay);
   }
 
   /**
