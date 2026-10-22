@@ -91,3 +91,28 @@ export interface CustomList {
   updated_at: string;
   items: CustomListItem[];
 }
+
+export interface InstanceDelta {
+  upsert?: CardInstance[];
+  delete?: string[]; // deleted instance IDs
+}
+
+export interface ListDelta {
+  upsert?: CustomList[];
+  delete?: string[]; // deleted list IDs
+}
+
+export interface SyncDeltaPayload {
+  deltaId: string;
+  clientId: string;
+  timestamp: number;
+  count?: number;
+  instances?: InstanceDelta;
+  lists?: ListDelta;
+  cards?: ScryfallCard[];
+  settings?: Record<string, any>;
+}
+
+export type CloudSyncPayload = 
+  | { type: 'delta'; delta: SyncDeltaPayload }
+  | { type: 'snapshot'; store: any; compressed?: boolean };

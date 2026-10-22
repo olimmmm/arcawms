@@ -83,7 +83,7 @@ async function getGistId(req?: any): Promise<string | null> {
   return null;
 }
 
-async function getGistQuickMeta(req?: any): Promise<{ timestamp: number; count: number; configured: boolean; gistId: string | null }> {
+async function getGistQuickMeta(req?: any): Promise<{ timestamp: number; count: number; deltaCount?: number; configured: boolean; gistId: string | null }> {
   const token = getToken(req);
   const configured = Boolean(token);
   const gistId = await getGistId(req);
@@ -114,6 +114,7 @@ async function getGistQuickMeta(req?: any): Promise<{ timestamp: number; count: 
         return {
           timestamp: meta.timestamp || 0,
           count: meta.count || 0,
+          deltaCount: typeof meta.deltaCount === 'number' ? meta.deltaCount : 0,
           configured: true,
           gistId
         };

@@ -170,6 +170,96 @@ async function getGistQuickMeta(gistId: string, req?: any): Promise<{ timestamp:
   return null;
 }
 
+async function saveGistDelta(delta: any, gistId: string, req?: any): Promise<{ success: boolean; error?: string; timestamp?: number }> {
+  if (!gistId) return { success: false, error: 'No Gist ID available' };
+
+  try {
+    const timestamp = delta.timestamp || Date.now();
+
+    // Fetch existing deltas log from Gist
+    const gistRes = await fetch(`${GITHUB_API_URL}/gists/${gistId}?_t=${Date.now()}`, {
+      headers: {
+        ...getHeaders(req),
+        'Cache-Control': 'no-cache, no-store'
+      }
+    });
+
+    let deltas: any[] = [];
+    let count = 0;
+
+    if (gistRes.ok) {
+      const gist = await gistRes.json();
+      const deltasFile = gist.files && gist.files['arcawms_deltas.json'];
+      if (deltasFile && deltasFile.content) {
+        try {
+          const parsed = JSON.parse(deltasFile.content);
+          if (Array.isArray(parsed)) deltas = parsed;
+        } catch {}
+      }
+
+      const metaFile = gist.files && gist.files['arcawms_meta.json'];
+      if (metaFile && metaFile.content) {
+        try {
+          const meta = JSON.parse(metaFile.content);
+          count = meta.count || 0;
+        } catch {}
+      }
+    }
+
+    // Append incoming delta and keep the rolling window of the last 50 deltas
+    deltas.push(delta);
+    if (deltas.length > 50) {
+      deltas = deltas.slice(deltas.length - 50);
+    }
+
+    // Keep count accurate: use count provided directly in delta if present, or fallback to existing meta count
+    if (typeof delta.count === 'number') {
+      count = delta.count;
+    } else if (delta.instances?.delete && Array.isArray(delta.instances.delete)) {
+      count = Math.max(0, count - delta.instances.delete.length);
+    }
+
+    const metaContent = JSON.stringify({
+      timestamp,
+      count,
+      deltaCount: deltas.length,
+      updated_at: new Date().toISOString()
+    });
+
+    // Write ONLY arcawms_deltas.json and arcawms_meta.json (~10 KB total, zero touch to arcawms_store.json)
+    const body = JSON.stringify({
+      description: GIST_DESCRIPTION,
+      files: {
+        'arcawms_meta.json': {
+          content: metaContent
+        },
+        'arcawms_deltas.json': {
+          content: JSON.stringify(deltas)
+        }
+      }
+    });
+
+    const res = await fetch(`${GITHUB_API_URL}/gists/${gistId}`, {
+      method: 'PATCH',
+      headers: getHeaders(req),
+      body
+    });
+
+    if (!res.ok) {
+      const errData: any = await res.json().catch(() => ({}));
+      return { 
+        success: false, 
+        error: `GitHub PATCH error (${res.status}): ${errData?.message || res.statusText}` 
+      };
+    }
+
+    return { success: true, timestamp };
+  } catch (err: any) {
+    console.error('[Vercel Gist] Error saving delta:', err);
+    return { success: false, error: err?.message || String(err) };
+  }
+}
+
 async function saveGistStore(data: any, gistId: string, req?: any): Promise<{ success: boolean; error?: string }> {
   if (!gistId) return { success: false, error: 'No Gist ID available' };
 
@@ -185,6 +275,7 @@ async function saveGistStore(data: any, gistId: string, req?: any): Promise<{ su
     const metaContent = JSON.stringify({
       timestamp,
       count,
+      deltaCount: 0,
       updated_at: new Date().toISOString()
     });
 
@@ -194,8 +285,11 @@ async function saveGistStore(data: any, gistId: string, req?: any): Promise<{ su
         'arcawms_meta.json': {
           content: metaContent
         },
+        'arcawms_deltas.json': {
+          content: '[]'
+        },
         [GIST_FILENAME]: {
-          content: JSON.stringify(data)
+          content: typeof data === 'string' ? data : JSON.stringify(data)
         }
       }
     });
@@ -242,38 +336,51 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (req.method === 'POST') {
-      let storeData = req.body?.store;
-      if (!storeData && typeof req.body === 'string') {
+      if (!gistId) {
+        return res.status(400).json({ success: false, error: 'No Gist ID available' });
+      }
+
+      let bodyData = req.body;
+      if (typeof bodyData === 'string') {
         try {
-          const parsed = JSON.parse(req.body);
-          storeData = parsed.store;
+          bodyData = JSON.parse(bodyData);
         } catch {}
       }
 
+      // Decompress if client sent gzip-compressed snapshot
+      if (bodyData?.compressed && bodyData?.data) {
+        try {
+          const rawBuffer = Buffer.from(bodyData.data, 'base64');
+          const decompStream = new Blob([rawBuffer]).stream().pipeThrough(new DecompressionStream('gzip'));
+          const decompText = await new Response(decompStream).text();
+          bodyData = JSON.parse(decompText);
+        } catch (decompErr: any) {
+          console.error('[store] Decompression error:', decompErr);
+          return res.status(400).json({ error: 'Failed to decompress compressed sync payload' });
+        }
+      }
+
+      // 1. Handle Delta Sync Mode (~120 B - 2 KB)
+      if (bodyData?.type === 'delta' || bodyData?.delta) {
+        const delta = bodyData.delta || bodyData;
+        const result = await saveGistDelta(delta, gistId, req);
+        if (!result.success) {
+          return res.status(502).json({ success: false, error: result.error, gistId });
+        }
+        return res.status(200).json({ success: true, type: 'delta', timestamp: result.timestamp, gistId });
+      }
+
+      // 2. Handle Full Snapshot Mode (backup restore or mass ingest)
+      let storeData = bodyData?.store || bodyData;
+
       if (storeData && Array.isArray(storeData.instances)) {
-        if (!gistId) {
-          return res.status(400).json({ success: false, error: 'No Gist ID available' });
-        }
-
         const incomingTs = storeData.timestamp || storeData.last_updated || 0;
-
-        // Stale timestamp conflict check: prevent an older device from wiping a newer cloud store
-        const existingMeta = await getGistQuickMeta(gistId, req);
-        if (existingMeta && existingMeta.timestamp > incomingTs) {
-          return res.status(409).json({ 
-            success: false, 
-            conflict: true, 
-            serverTimestamp: existingMeta.timestamp, 
-            clientTimestamp: incomingTs,
-            gistId
-          });
-        }
 
         const result = await saveGistStore(storeData, gistId, req);
         if (!result.success) {
           return res.status(502).json({ success: false, error: result.error, gistId });
         }
-        return res.status(200).json({ success: true, timestamp: incomingTs, gistId });
+        return res.status(200).json({ success: true, type: 'snapshot', timestamp: incomingTs, gistId });
       }
       return res.status(400).json({ error: 'Missing or invalid store data' });
     }

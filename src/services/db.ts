@@ -1,4 +1,4 @@
-import { ActivityLogItem, CardInstance, InventoryStats, ScryfallCard, CustomList, CustomListItem } from '../types';
+import { ActivityLogItem, CardInstance, InventoryStats, ScryfallCard, CustomList, CustomListItem, SyncDeltaPayload, InstanceDelta, ListDelta } from '../types';
 import { parseLocationId, normalizeCardName, getFrontFaceName } from './pickPath';
 import { idbGet, idbSet } from './idb';
 
@@ -374,6 +374,49 @@ class ArcaDatabase {
   private lastUpdated: number = 0;
   private hydrationPromise: Promise<void>;
 
+  // === DELTA TRACKER FOR MICRO-EDITS ===
+  private pendingUpsertInstances: Map<string, CardInstance> = new Map();
+  private pendingDeleteInstances: Set<string> = new Set();
+  private pendingUpsertLists: Map<string, CustomList> = new Map();
+  private pendingDeleteLists: Set<string> = new Set();
+  private pendingCards: Map<string, ScryfallCard> = new Map();
+  private pendingSettings: Record<string, any> = {};
+  private isApplyingDelta = false;
+
+  private recordInstanceMutation(inst: CardInstance) {
+    if (this.isApplyingDelta) return;
+    this.pendingDeleteInstances.delete(inst.instance_id);
+    this.pendingUpsertInstances.set(inst.instance_id, { ...inst });
+  }
+
+  private recordInstanceDeletion(instanceId: string) {
+    if (this.isApplyingDelta) return;
+    this.pendingUpsertInstances.delete(instanceId);
+    this.pendingDeleteInstances.add(instanceId);
+  }
+
+  private recordListMutation(list: CustomList) {
+    if (this.isApplyingDelta) return;
+    this.pendingDeleteLists.delete(list.id);
+    this.pendingUpsertLists.set(list.id, { ...list, items: [...list.items] });
+  }
+
+  private recordListDeletion(listId: string) {
+    if (this.isApplyingDelta) return;
+    this.pendingUpsertLists.delete(listId);
+    this.pendingDeleteLists.add(listId);
+  }
+
+  private recordCardMutation(card: ScryfallCard) {
+    if (this.isApplyingDelta) return;
+    this.pendingCards.set(card.oracle_id, { ...card });
+  }
+
+  private recordSettingsMutation(settings: Record<string, any>) {
+    if (this.isApplyingDelta) return;
+    Object.assign(this.pendingSettings, settings);
+  }
+
   constructor() {
     this.init();
     this.hydrationPromise = this.hydrateFromIndexedDB();
@@ -700,6 +743,7 @@ class ArcaDatabase {
       items: []
     };
     this.customLists.set(newList.id, newList);
+    this.recordListMutation(newList);
     this.saveCustomLists();
     this.touchUpdated();
     this.notify();
@@ -714,6 +758,7 @@ class ArcaDatabase {
       existing.description = description.trim();
     }
     existing.updated_at = new Date().toISOString();
+    this.recordListMutation(existing);
     this.saveCustomLists();
     this.touchUpdated();
     this.notify();
@@ -723,6 +768,7 @@ class ArcaDatabase {
   public deleteCustomList(id: string): boolean {
     if (!this.customLists.has(id)) return false;
     this.customLists.delete(id);
+    this.recordListDeletion(id);
     this.saveCustomLists();
     this.touchUpdated();
     this.notify();
@@ -775,6 +821,7 @@ class ArcaDatabase {
     }
 
     list.updated_at = new Date().toISOString();
+    this.recordListMutation(list);
     this.saveCustomLists();
     this.touchUpdated();
     this.notify();
@@ -833,6 +880,7 @@ class ArcaDatabase {
     }
 
     list.updated_at = new Date().toISOString();
+    this.recordListMutation(list);
     this.saveCustomLists();
     this.touchUpdated();
     this.notify();
@@ -868,6 +916,7 @@ class ArcaDatabase {
 
     item.count = count;
     list.updated_at = new Date().toISOString();
+    this.recordListMutation(list);
     this.saveCustomLists();
     this.touchUpdated();
     this.notify();
@@ -883,6 +932,7 @@ class ArcaDatabase {
 
     item.notes = notes;
     list.updated_at = new Date().toISOString();
+    this.recordListMutation(list);
     this.saveCustomLists();
     this.touchUpdated();
     this.notify();
@@ -969,6 +1019,7 @@ class ArcaDatabase {
 
     // 2. Store canonical card
     this.cards.set(card.oracle_id, card);
+    this.recordCardMutation(card);
     this.updateCardNameIndex(card);
     this.saveCards();
 
@@ -1158,6 +1209,7 @@ class ArcaDatabase {
       updated_at: new Date().toISOString()
     };
     this.instances.set(newInst.instance_id, newInst);
+    this.recordInstanceMutation(newInst);
     this.addInstanceToNameIndex(newInst);
     this.saveInstances();
     this.touchUpdated();
@@ -1213,6 +1265,7 @@ class ArcaDatabase {
       };
 
       this.instances.set(newInst.instance_id, newInst);
+      this.recordInstanceMutation(newInst);
       this.addInstanceToNameIndex(newInst);
       created.push(newInst);
 
@@ -1256,12 +1309,14 @@ class ArcaDatabase {
     const existing = this.instances.get(instanceId);
     if (existing) {
       const fromLoc = existing.location_id || (existing.state === 'P' ? 'Proxy Box' : 'Drawer');
-      this.instances.set(instanceId, {
+      const updatedInst: CardInstance = {
         ...existing,
         state: 'B',
         location_id: null,
         updated_at: new Date().toISOString()
-      });
+      };
+      this.instances.set(instanceId, updatedInst);
+      this.recordInstanceMutation(updatedInst);
       this.saveInstances();
       this.touchUpdated();
 
@@ -1291,12 +1346,14 @@ class ArcaDatabase {
         throw new Error('Storage Units CANNOT contain proxies. Proxies must be stored in Proxy Box.');
       }
 
-      this.instances.set(instanceId, {
+      const updatedInst: CardInstance = {
         ...existing,
         state: 'A',
         location_id: locationId,
         updated_at: new Date().toISOString()
-      });
+      };
+      this.instances.set(instanceId, updatedInst);
+      this.recordInstanceMutation(updatedInst);
       this.saveInstances();
       this.touchUpdated();
 
@@ -1341,6 +1398,7 @@ class ArcaDatabase {
         updated_at: now
       };
       this.instances.set(update.instanceId, updatedInst);
+      this.recordInstanceMutation(updatedInst);
       modified = true;
 
       const groupKey = `${existing.card_name}|${update.locationId}`;
@@ -1383,13 +1441,15 @@ class ArcaDatabase {
     const existing = this.instances.get(instanceId);
     if (existing) {
       const fromLoc = existing.location_id || (existing.state === 'B' ? 'Brewing/Decks' : 'Drawer');
-      this.instances.set(instanceId, {
+      const updatedInst: CardInstance = {
         ...existing,
         state: 'P',
         location_id: 'Proxy Box',
         is_proxy: true,
         updated_at: new Date().toISOString()
-      });
+      };
+      this.instances.set(instanceId, updatedInst);
+      this.recordInstanceMutation(updatedInst);
       this.saveInstances();
       this.touchUpdated();
 
@@ -1415,13 +1475,15 @@ class ArcaDatabase {
     const existing = this.instances.get(instanceId);
     if (existing) {
       const fromLoc = existing.location_id || (existing.state === 'B' ? 'Brewing/Decks' : 'Drawer');
-      this.instances.set(instanceId, {
+      const updatedInst: CardInstance = {
         ...existing,
         state: 'P',
         location_id: 'Proxy Box',
         is_proxy: true,
         updated_at: new Date().toISOString()
-      });
+      };
+      this.instances.set(instanceId, updatedInst);
+      this.recordInstanceMutation(updatedInst);
       this.saveInstances();
       this.touchUpdated();
 
@@ -1478,6 +1540,7 @@ class ArcaDatabase {
     };
 
     this.instances.set(instanceId, updated);
+    this.recordInstanceMutation(updated);
     this.saveInstances();
     this.touchUpdated();
 
@@ -1512,6 +1575,7 @@ class ArcaDatabase {
     };
 
     this.instances.set(instanceId, updated);
+    this.recordInstanceMutation(updated);
     this.saveInstances();
     this.touchUpdated();
 
@@ -1537,12 +1601,14 @@ class ArcaDatabase {
         throw new Error('Storage Units CANNOT contain proxies.');
       }
       const oldLoc = existing.location_id;
-      this.instances.set(instanceId, {
+      const updatedInst: CardInstance = {
         ...existing,
         state: 'A',
         location_id: locationId,
         updated_at: new Date().toISOString()
-      });
+      };
+      this.instances.set(instanceId, updatedInst);
+      this.recordInstanceMutation(updatedInst);
       this.saveInstances();
       this.touchUpdated();
 
@@ -1568,6 +1634,7 @@ class ArcaDatabase {
     const existing = this.instances.get(instanceId);
     const res = this.instances.delete(instanceId);
     if (res && existing) {
+      this.recordInstanceDeletion(instanceId);
       this.removeInstanceFromNameIndex(existing);
       this.saveInstances();
       this.touchUpdated();
@@ -2049,6 +2116,10 @@ class ArcaDatabase {
       }));
     } catch {}
 
+    if (settings.theme !== undefined || settings.unitCount !== undefined) {
+      this.recordSettingsMutation({ theme: nextTheme, unitCount: nextUnitCount });
+    }
+
     // Store auth credentials in private dedicated storage keys
     if (settings.githubToken !== undefined) {
       const cleanToken = cleanTokenAscii(settings.githubToken);
@@ -2340,6 +2411,149 @@ class ArcaDatabase {
     this.saveHistory();
     this.touchUpdated();
     this.notify();
+  }
+
+  // === PUBLIC DELTA SYNC INTERFACE ===
+
+  public hasPendingDeltas(): boolean {
+    return (
+      this.pendingUpsertInstances.size > 0 ||
+      this.pendingDeleteInstances.size > 0 ||
+      this.pendingUpsertLists.size > 0 ||
+      this.pendingDeleteLists.size > 0 ||
+      this.pendingCards.size > 0 ||
+      Object.keys(this.pendingSettings).length > 0
+    );
+  }
+
+  public getPendingDeltaCount(): number {
+    return (
+      this.pendingUpsertInstances.size +
+      this.pendingDeleteInstances.size +
+      this.pendingUpsertLists.size +
+      this.pendingDeleteLists.size +
+      this.pendingCards.size
+    );
+  }
+
+  public extractPendingDelta(clientId: string): SyncDeltaPayload | null {
+    if (!this.hasPendingDeltas()) return null;
+
+    const delta: SyncDeltaPayload = {
+      deltaId: generateUUID(),
+      clientId,
+      timestamp: this.lastUpdated,
+      count: this.instances.size,
+      instances: {
+        upsert: this.pendingUpsertInstances.size > 0 ? Array.from(this.pendingUpsertInstances.values()) : undefined,
+        delete: this.pendingDeleteInstances.size > 0 ? Array.from(this.pendingDeleteInstances.values()) : undefined
+      },
+      lists: {
+        upsert: this.pendingUpsertLists.size > 0 ? Array.from(this.pendingUpsertLists.values()) : undefined,
+        delete: this.pendingDeleteLists.size > 0 ? Array.from(this.pendingDeleteLists.values()) : undefined
+      },
+      cards: this.pendingCards.size > 0 ? Array.from(this.pendingCards.values()) : undefined,
+      settings: Object.keys(this.pendingSettings).length > 0 ? { ...this.pendingSettings } : undefined
+    };
+
+    this.clearPendingDeltas();
+    return delta;
+  }
+
+  public clearPendingDeltas(): void {
+    this.pendingUpsertInstances.clear();
+    this.pendingDeleteInstances.clear();
+    this.pendingUpsertLists.clear();
+    this.pendingDeleteLists.clear();
+    this.pendingCards.clear();
+    this.pendingSettings = {};
+  }
+
+  public applyDelta(delta: SyncDeltaPayload): { success: boolean; changesCount: number } {
+    if (!delta || typeof delta !== 'object') return { success: false, changesCount: 0 };
+
+    this.isApplyingDelta = true;
+    let changesCount = 0;
+
+    try {
+      // 1. Delete instances
+      if (delta.instances?.delete && Array.isArray(delta.instances.delete)) {
+        for (const id of delta.instances.delete) {
+          const existing = this.instances.get(id);
+          if (existing) {
+            this.removeInstanceFromNameIndex(existing);
+            this.instances.delete(id);
+            changesCount++;
+          }
+        }
+      }
+
+      // 2. Upsert instances
+      if (delta.instances?.upsert && Array.isArray(delta.instances.upsert)) {
+        for (const inst of delta.instances.upsert) {
+          if (!inst || !inst.instance_id) continue;
+          const existing = this.instances.get(inst.instance_id);
+          this.instances.set(inst.instance_id, { ...inst });
+          if (existing) {
+            this.removeInstanceFromNameIndex(existing);
+          }
+          this.addInstanceToNameIndex(inst);
+          changesCount++;
+        }
+      }
+
+      // 3. Delete lists
+      if (delta.lists?.delete && Array.isArray(delta.lists.delete)) {
+        for (const id of delta.lists.delete) {
+          if (this.customLists.delete(id)) {
+            changesCount++;
+          }
+        }
+      }
+
+      // 4. Upsert lists
+      if (delta.lists?.upsert && Array.isArray(delta.lists.upsert)) {
+        for (const list of delta.lists.upsert) {
+          if (!list || !list.id) continue;
+          this.customLists.set(list.id, { ...list, items: Array.isArray(list.items) ? [...list.items] : [] });
+          changesCount++;
+        }
+      }
+
+      // 5. Cards metadata
+      if (delta.cards && Array.isArray(delta.cards)) {
+        for (const card of delta.cards) {
+          if (card && card.oracle_id) {
+            this.cards.set(card.oracle_id, card);
+            this.updateCardNameIndex(card);
+            changesCount++;
+          }
+        }
+      }
+
+      // 6. Settings
+      if (delta.settings && typeof delta.settings === 'object') {
+        this.updateSettings({ ...delta.settings });
+      }
+
+      if (changesCount > 0) {
+        this.saveInstances();
+        this.saveCustomLists();
+        this.saveCards();
+      }
+
+      if (delta.timestamp && delta.timestamp > this.lastUpdated) {
+        this.touchUpdated(delta.timestamp);
+      }
+
+      this.notify();
+      return { success: true, changesCount };
+    } catch (err) {
+      console.error('[ArcaDB] Error applying delta:', err);
+      return { success: false, changesCount: 0 };
+    } finally {
+      this.isApplyingDelta = false;
+    }
   }
 }
 

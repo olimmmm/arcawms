@@ -1,5 +1,6 @@
 import { db } from './db';
 import { applyTheme, GuildThemeId } from './theme';
+import { compressGzip, isGzipSupported } from './compression';
 
 export type SyncStatus = 'connected' | 'connecting' | 'disconnected' | 'error';
 export type CloudUploadState = 'idle' | 'syncing' | 'synced' | 'error';
@@ -130,6 +131,10 @@ class SyncClient {
             if (event.data.clientId !== CLIENT_ID) {
               this.handleLiveBroadcast(event.data.payload, event.data.clientId);
             }
+          } else if (event.data?.type === 'TAB_DELTA' && !this.isProcessingRemoteUpdate) {
+            if (event.data.clientId !== CLIENT_ID && event.data.delta) {
+              this.handleLiveDelta(event.data.delta, event.data.clientId);
+            }
           }
         };
       } catch (e) {
@@ -185,6 +190,20 @@ class SyncClient {
     }
   }
 
+  private handleLiveDelta(delta: any, senderClientId?: string) {
+    if (this.isUserImporting) return;
+    if (senderClientId && senderClientId === CLIENT_ID) return;
+    this.isProcessingRemoteUpdate = true;
+    try {
+      if (delta.settings?.theme) {
+        applyTheme(delta.settings.theme as GuildThemeId);
+      }
+      db.applyDelta(delta);
+    } finally {
+      setTimeout(() => { this.isProcessingRemoteUpdate = false; }, 250);
+    }
+  }
+
   private async checkServerStoreHttp() {
     if (this.isUserImporting || this.isCheckingServer) return;
     this.isCheckingServer = true;
@@ -222,25 +241,72 @@ class SyncClient {
           return;
         }
 
-        // Only download full JSON store if server is actually newer!
+        // Only download if server is actually newer!
         if (remoteTs > localTs) {
-          const storeController = new AbortController();
-          const storeTimeout = setTimeout(() => storeController.abort(), 12000);
+          let deltaSyncSucceeded = false;
 
-          const storeRes = await fetch(`/api/sync/store?_t=${Date.now()}`, { 
-            headers: getSyncHeaders(),
-            cache: 'no-store',
-            signal: storeController.signal
-          });
-          clearTimeout(storeTimeout);
+          // FAST-PATH: Try Delta Sync first if local has established state
+          if (localTs > 0 && localCount > 0) {
+            try {
+              const deltaController = new AbortController();
+              const deltaTimeout = setTimeout(() => deltaController.abort(), 8000);
 
-          if (storeRes.ok) {
-            const data = await storeRes.json();
-            if (data?.gistId && db.getSettings().gistId !== data.gistId) {
-              db.updateSettings({ gistId: data.gistId });
+              const deltasRes = await fetch(`/api/sync/deltas?since=${localTs}&_t=${Date.now()}`, {
+                headers: getSyncHeaders(),
+                cache: 'no-store',
+                signal: deltaController.signal
+              });
+              clearTimeout(deltaTimeout);
+
+              if (deltasRes.ok) {
+                const deltasData = await deltasRes.json();
+                if (deltasData?.gistId && db.getSettings().gistId !== deltasData.gistId) {
+                  db.updateSettings({ gistId: deltasData.gistId });
+                }
+
+                if (!deltasData.hasGap && Array.isArray(deltasData.deltas)) {
+                  if (deltasData.deltas.length > 0) {
+                    this.isProcessingRemoteUpdate = true;
+                    try {
+                      for (const d of deltasData.deltas) {
+                        if (d.settings?.theme) {
+                          applyTheme(d.settings.theme as GuildThemeId);
+                        }
+                        db.applyDelta(d);
+                      }
+                      console.log(`[SyncClient] Delta sync applied ${deltasData.deltas.length} deltas successfully.`);
+                    } finally {
+                      setTimeout(() => { this.isProcessingRemoteUpdate = false; }, 250);
+                    }
+                  }
+                  deltaSyncSucceeded = true;
+                }
+              }
+            } catch (deltaErr) {
+              console.debug('[SyncClient] Delta fetch failed, falling back to full store:', deltaErr);
             }
-            if (data?.store) {
-              this.reconcileWithServer(data.store);
+          }
+
+          // FULL STORE FALLBACK: If delta sync had gaps or wasn't applicable
+          if (!deltaSyncSucceeded) {
+            const storeController = new AbortController();
+            const storeTimeout = setTimeout(() => storeController.abort(), 12000);
+
+            const storeRes = await fetch(`/api/sync/store?_t=${Date.now()}`, { 
+              headers: getSyncHeaders(),
+              cache: 'no-store',
+              signal: storeController.signal
+            });
+            clearTimeout(storeTimeout);
+
+            if (storeRes.ok) {
+              const data = await storeRes.json();
+              if (data?.gistId && db.getSettings().gistId !== data.gistId) {
+                db.updateSettings({ gistId: data.gistId });
+              }
+              if (data?.store) {
+                this.reconcileWithServer(data.store);
+              }
             }
           }
         }
@@ -533,6 +599,68 @@ class SyncClient {
     }, 12000);
 
     try {
+      // 1. FAST-PATH: DELTA SYNC
+      // If we have pending deltas and fewer than 150 changes (typical everyday card actions),
+      // send a tiny delta patch (~120 B - 2 KB) instead of full megabytes snapshot.
+      const hasDeltas = db.hasPendingDeltas();
+      const deltaCount = db.getPendingDeltaCount();
+      const isDeltaCandidate = hasDeltas && !this.isUserImporting && deltaCount <= 150;
+
+      if (isDeltaCandidate) {
+        const delta = db.extractPendingDelta(CLIENT_ID);
+        if (delta) {
+          // Multi-tab broadcast
+          if (this.broadcastChannel && broadcastMutation) {
+            try {
+              this.broadcastChannel.postMessage({
+                type: 'TAB_DELTA',
+                delta,
+                clientId: CLIENT_ID
+              });
+            } catch {}
+          }
+
+          // Push delta to cloud API
+          const body = JSON.stringify({
+            type: 'delta',
+            delta,
+            clientId: CLIENT_ID
+          });
+
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+          const res = await fetch('/api/sync/store', {
+            method: 'POST',
+            headers: getSyncHeaders(),
+            body,
+            signal: controller.signal
+          });
+          clearTimeout(timeoutId);
+
+          if (res.ok) {
+            const json = await res.json().catch(() => ({}));
+            if (json?.gistId && db.getSettings().gistId !== json.gistId) {
+              db.updateSettings({ gistId: json.gistId });
+            }
+
+            if (json.success !== false) {
+              this.setUploadState('synced');
+              if (this.syncedResetTimer) clearTimeout(this.syncedResetTimer);
+              this.syncedResetTimer = setTimeout(() => {
+                if (this.uploadState === 'synced') {
+                  this.setUploadState('idle');
+                }
+              }, 2000);
+              return;
+            }
+          }
+
+          console.warn('[SyncClient] Delta push was rejected or failed. Falling back to full snapshot.');
+        }
+      }
+
+      // 2. FULL SNAPSHOT PUSH (Mass ingest, backup restore, or delta fallback)
       const { githubToken, gistId, ...safeSettings } = db.getSettings();
 
       const instances = db.getAllInstances();
@@ -582,7 +710,7 @@ class SyncClient {
         } catch {}
       }
 
-      // 2. WebSocket push (real-time cross-device)
+      // 2. WebSocket push (real-time cross-device if connected)
       let pushedOverWs = false;
       if (this.ws && this.ws.readyState === WebSocket.OPEN && broadcastMutation) {
         try {
@@ -592,13 +720,14 @@ class SyncClient {
             clientId: CLIENT_ID
           }));
           pushedOverWs = true;
+          db.clearPendingDeltas();
           this.setUploadState('synced');
           if (this.syncedResetTimer) clearTimeout(this.syncedResetTimer);
           this.syncedResetTimer = setTimeout(() => {
             if (this.uploadState === 'synced') {
               this.setUploadState('idle');
             }
-          }, 3000);
+          }, 2000);
         } catch {
           pushedOverWs = false;
         }
@@ -606,19 +735,43 @@ class SyncClient {
 
       // 3. Reliable HTTP POST fallback: only send if WebSocket is NOT connected, or on explicit unload
       if (!pushedOverWs) {
-        const body = JSON.stringify({ 
-          store: payload, 
-          clientId: CLIENT_ID, 
-          broadcastMutation 
-        });
+        let requestBody: string;
+        const rawJson = JSON.stringify(payload);
+
+        // Gzip compression for large payloads (> 50 KB, e.g. 15,000 card backups)
+        if (rawJson.length > 50 * 1024 && isGzipSupported()) {
+          try {
+            const compressedBase64 = await compressGzip(rawJson);
+            requestBody = JSON.stringify({
+              compressed: true,
+              data: compressedBase64,
+              clientId: CLIENT_ID,
+              broadcastMutation
+            });
+            console.log(`[SyncClient] Gzip compressed full snapshot (${(rawJson.length / 1024).toFixed(1)} KB -> ${(compressedBase64.length / 1024).toFixed(1)} KB)`);
+          } catch (compErr) {
+            console.warn('[SyncClient] Compression failed, sending raw JSON:', compErr);
+            requestBody = JSON.stringify({
+              store: payload,
+              clientId: CLIENT_ID,
+              broadcastMutation
+            });
+          }
+        } else {
+          requestBody = JSON.stringify({ 
+            store: payload, 
+            clientId: CLIENT_ID, 
+            broadcastMutation 
+          });
+        }
 
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 12000);
+        const timeoutId = setTimeout(() => controller.abort(), 16000);
 
         const res = await fetch('/api/sync/store', {
           method: 'POST',
           headers: getSyncHeaders(),
-          body,
+          body: requestBody,
           signal: controller.signal
         });
         clearTimeout(timeoutId);
@@ -640,13 +793,14 @@ class SyncClient {
           }
 
           if (json.success !== false) {
+            db.clearPendingDeltas();
             this.setUploadState('synced');
             if (this.syncedResetTimer) clearTimeout(this.syncedResetTimer);
             this.syncedResetTimer = setTimeout(() => {
               if (this.uploadState === 'synced') {
                 this.setUploadState('idle');
               }
-            }, 3000);
+            }, 2000);
           } else {
             console.warn('[SyncClient] Cloud store reported save failure:', json.error);
             this.setUploadState('error');

@@ -27,6 +27,7 @@ if (!fs.existsSync(DATA_DIR)) {
 }
 
 let currentStore: any = null;
+let recentDeltas: any[] = [];
 let saveDebounceTimer: any = null;
 let gistSaveDebounceTimer: any = null;
 
@@ -145,7 +146,24 @@ app.get('/api/sync/cloud-status', (req, res) => {
 app.get('/api/sync/meta', (req, res) => {
   res.json({
     timestamp: currentStore?.timestamp || currentStore?.last_updated || 0,
-    count: Array.isArray(currentStore?.instances) ? currentStore.instances.length : 0
+    count: Array.isArray(currentStore?.instances) ? currentStore.instances.length : 0,
+    deltaCount: recentDeltas.length
+  });
+});
+
+app.get('/api/sync/deltas', (req, res) => {
+  const sinceParam = req.query.since;
+  const since = typeof sinceParam === 'string' ? (parseInt(sinceParam, 10) || 0) : 0;
+  const filtered = recentDeltas.filter(d => (d.timestamp || 0) > since);
+  const oldestInLog = recentDeltas.length > 0 ? (recentDeltas[0].timestamp || 0) : 0;
+  const metaTimestamp = currentStore?.timestamp || currentStore?.last_updated || 0;
+  const hasGap = (since > 0 && recentDeltas.length > 0 && since < oldestInLog) || (metaTimestamp > since && recentDeltas.length === 0);
+
+  res.json({
+    deltas: filtered,
+    hasGap,
+    totalDeltasInLog: recentDeltas.length,
+    serverTimestamp: metaTimestamp
   });
 });
 
@@ -154,7 +172,44 @@ app.get('/api/sync/store', (req, res) => {
 });
 
 app.post('/api/sync/store', (req, res) => {
-  const { store, clientId, broadcastMutation } = req.body;
+  let bodyData = req.body;
+  if (typeof bodyData === 'string') {
+    try { bodyData = JSON.parse(bodyData); } catch {}
+  }
+
+  // 1. Delta Sync Mode
+  if (bodyData?.type === 'delta' || bodyData?.delta) {
+    const delta = bodyData.delta || bodyData;
+    recentDeltas.push(delta);
+    if (recentDeltas.length > 50) {
+      recentDeltas = recentDeltas.slice(recentDeltas.length - 50);
+    }
+
+    if (currentStore) {
+      if (delta.instances?.delete && Array.isArray(delta.instances.delete)) {
+        const delSet = new Set(delta.instances.delete);
+        currentStore.instances = (currentStore.instances || []).filter((i: any) => !delSet.has(i.instance_id));
+      }
+      if (delta.instances?.upsert && Array.isArray(delta.instances.upsert)) {
+        const instMap = new Map((currentStore.instances || []).map((i: any) => [i.instance_id, i]));
+        for (const inst of delta.instances.upsert) {
+          instMap.set(inst.instance_id, inst);
+        }
+        currentStore.instances = Array.from(instMap.values());
+      }
+      if (delta.timestamp) {
+        currentStore.timestamp = delta.timestamp;
+      }
+      saveStore(currentStore);
+    }
+    return res.json({ success: true, type: 'delta', timestamp: delta.timestamp || Date.now() });
+  }
+
+  // 2. Full Snapshot Mode
+  const store = bodyData?.store || bodyData;
+  const clientId = bodyData?.clientId;
+  const broadcastMutation = bodyData?.broadcastMutation;
+
   if (store && Array.isArray(store.instances)) {
     const currentCount = Array.isArray(currentStore?.instances) ? currentStore.instances.length : 0;
     const incomingCount = store.instances.length;
@@ -163,6 +218,7 @@ app.post('/api/sync/store', (req, res) => {
       console.warn(`[SyncServer] Notice: Incoming store has ${incomingCount} cards, current store has ${currentCount}. Guarding data integrity.`);
     }
 
+    recentDeltas = [];
     saveStore(store);
     if (broadcastMutation !== false) {
       broadcast({
