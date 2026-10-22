@@ -597,6 +597,7 @@ class SyncClient {
         if (res.status === 409) {
           // Conflict: Server has newer updates from another device! Pull newer changes
           console.log('[SyncClient] Server has newer changes from another device. Syncing down...');
+          this.hasPendingPush = false;
           this.setUploadState('idle');
           await this.checkServerStoreHttp();
           return;

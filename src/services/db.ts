@@ -637,7 +637,11 @@ class ArcaDatabase {
   }
 
   private touchUpdated(ts?: number) {
-    this.lastUpdated = (typeof ts === 'number' && ts > 0) ? ts : Date.now();
+    if (typeof ts === 'number' && ts > 0) {
+      this.lastUpdated = ts;
+    } else {
+      this.lastUpdated = Math.max(Date.now(), (this.lastUpdated || 0) + 1);
+    }
     idbSet(STORAGE_KEY_LAST_UPDATED, this.lastUpdated);
     try {
       localStorage.setItem(STORAGE_KEY_LAST_UPDATED, String(this.lastUpdated));
