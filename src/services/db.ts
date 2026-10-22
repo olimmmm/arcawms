@@ -1664,6 +1664,7 @@ class ArcaDatabase {
       updated_at: new Date().toISOString()
     };
     this.instances.set(sanitized.instance_id, sanitized);
+    this.recordInstanceMutation(sanitized);
     this.addInstanceToNameIndex(sanitized);
     this.saveInstances();
     this.touchUpdated();
@@ -2544,6 +2545,8 @@ class ArcaDatabase {
 
       if (delta.timestamp && delta.timestamp > this.lastUpdated) {
         this.touchUpdated(delta.timestamp);
+      } else if (changesCount > 0) {
+        this.touchUpdated(this.lastUpdated + 1);
       }
 
       this.notify();

@@ -157,7 +157,10 @@ app.get('/api/sync/deltas', (req, res) => {
   const filtered = recentDeltas.filter(d => (d.timestamp || 0) > since);
   const oldestInLog = recentDeltas.length > 0 ? (recentDeltas[0].timestamp || 0) : 0;
   const metaTimestamp = currentStore?.timestamp || currentStore?.last_updated || 0;
-  const hasGap = (since > 0 && recentDeltas.length > 0 && since < oldestInLog) || (metaTimestamp > since && recentDeltas.length === 0);
+  const resetGap = metaTimestamp > since && recentDeltas.length === 0;
+  const prunedGap = since > 0 && recentDeltas.length >= 50 && since < oldestInLog;
+  const missingGap = metaTimestamp > since && filtered.length === 0;
+  const hasGap = resetGap || prunedGap || missingGap;
 
   res.json({
     deltas: filtered,

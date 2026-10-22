@@ -152,11 +152,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const filtered = deltas.filter(d => (d.timestamp || 0) > since);
 
-    // Can client fast-path apply deltas?
-    // If the oldest delta in the log is > since, or if deltas log was reset (e.g. after a full snapshot),
-    // there is a gap and full store sync is required.
     const oldestInLog = deltas.length > 0 ? (deltas[0].timestamp || 0) : 0;
-    const hasGap = (since > 0 && deltas.length > 0 && since < oldestInLog) || (metaTimestamp > since && deltas.length === 0);
+
+    // Gap detection:
+    // 1. If deltas log was reset (e.g. after a full snapshot), but server is newer than client
+    const resetGap = metaTimestamp > since && deltas.length === 0;
+
+    // 2. If the log reached rolling capacity (50) and client's timestamp is older than the oldest delta in the log,
+    // then intermediate deltas between client's timestamp and oldestInLog were pruned from history.
+    const prunedGap = since > 0 && deltas.length >= 50 && since < oldestInLog;
+
+    // 3. If server is newer than client, but no matching deltas were found
+    const missingGap = metaTimestamp > since && filtered.length === 0;
+
+    const hasGap = resetGap || prunedGap || missingGap;
 
     return res.status(200).json({
       deltas: filtered,

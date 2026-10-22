@@ -109,6 +109,47 @@ async function getGistId(req?: any): Promise<string | null> {
   return null;
 }
 
+function applyDeltasToSnapshot(store: any, deltas: any[]): void {
+  if (!store || !Array.isArray(store.instances) || !Array.isArray(deltas) || deltas.length === 0) return;
+  const instMap = new Map<string, any>(store.instances.map((i: any) => [i.instance_id, i]));
+  const listMap = new Map<string, any>((store.custom_lists || []).map((l: any) => [l.id, l]));
+  const cardMap = new Map<string, any>((store.cards || []).map((c: any) => [c.oracle_id, c]));
+
+  for (const delta of deltas) {
+    if (delta.instances?.delete && Array.isArray(delta.instances.delete)) {
+      for (const id of delta.instances.delete) instMap.delete(id);
+    }
+    if (delta.instances?.upsert && Array.isArray(delta.instances.upsert)) {
+      for (const inst of delta.instances.upsert) {
+        if (inst && inst.instance_id) instMap.set(inst.instance_id, inst);
+      }
+    }
+    if (delta.lists?.delete && Array.isArray(delta.lists.delete)) {
+      for (const id of delta.lists.delete) listMap.delete(id);
+    }
+    if (delta.lists?.upsert && Array.isArray(delta.lists.upsert)) {
+      for (const list of delta.lists.upsert) {
+        if (list && list.id) listMap.set(list.id, list);
+      }
+    }
+    if (delta.cards && Array.isArray(delta.cards)) {
+      for (const c of delta.cards) {
+        if (c && c.oracle_id) cardMap.set(c.oracle_id, c);
+      }
+    }
+    if (delta.settings && typeof delta.settings === 'object') {
+      store.settings = { ...(store.settings || {}), ...delta.settings };
+    }
+    if (delta.timestamp && delta.timestamp > (store.timestamp || 0)) {
+      store.timestamp = delta.timestamp;
+    }
+  }
+
+  store.instances = Array.from(instMap.values());
+  store.custom_lists = Array.from(listMap.values());
+  store.cards = Array.from(cardMap.values());
+}
+
 async function loadGistStore(req?: any): Promise<any | null> {
   const gistId = await getGistId(req);
   if (!gistId) return null;
@@ -139,7 +180,40 @@ async function loadGistStore(req?: any): Promise<any | null> {
     }
 
     if (content) {
-      return JSON.parse(content);
+      const store = JSON.parse(content);
+
+      // Merge rolling deltas into snapshot so full store response is 100% current
+      const deltasFile = gist.files && gist.files['arcawms_deltas.json'];
+      let deltas: any[] = [];
+      if (deltasFile && deltasFile.content) {
+        try {
+          const parsed = JSON.parse(deltasFile.content);
+          if (Array.isArray(parsed)) deltas = parsed;
+        } catch {}
+      } else if (deltasFile && deltasFile.raw_url) {
+        try {
+          const rawDeltas = await fetch(deltasFile.raw_url, {
+            headers: {
+              ...getHeaders(req),
+              'Cache-Control': 'no-cache, no-store'
+            }
+          });
+          if (rawDeltas.ok) {
+            const rawParsed = await rawDeltas.json();
+            if (Array.isArray(rawParsed)) deltas = rawParsed;
+          }
+        } catch {}
+      }
+
+      if (Array.isArray(deltas) && deltas.length > 0) {
+        const storeTs = store.timestamp || store.last_updated || 0;
+        const pendingDeltas = deltas.filter(d => (d.timestamp || 0) > storeTs);
+        if (pendingDeltas.length > 0) {
+          applyDeltasToSnapshot(store, pendingDeltas);
+        }
+      }
+
+      return store;
     }
   } catch (err) {
     console.error('[Vercel Gist] Error loading store:', err);
@@ -194,6 +268,19 @@ async function saveGistDelta(delta: any, gistId: string, req?: any): Promise<{ s
         try {
           const parsed = JSON.parse(deltasFile.content);
           if (Array.isArray(parsed)) deltas = parsed;
+        } catch {}
+      } else if (deltasFile && deltasFile.raw_url) {
+        try {
+          const rawRes = await fetch(deltasFile.raw_url, {
+            headers: {
+              ...getHeaders(req),
+              'Cache-Control': 'no-cache, no-store'
+            }
+          });
+          if (rawRes.ok) {
+            const rawParsed = await rawRes.json();
+            if (Array.isArray(rawParsed)) deltas = rawParsed;
+          }
         } catch {}
       }
 
