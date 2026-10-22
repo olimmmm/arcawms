@@ -98,9 +98,9 @@ class SyncClient {
     this.isUserImporting = false;
   }
 
-  public async resumeSyncAndPush() {
+  public async resumeSyncAndPush(): Promise<boolean> {
     this.isUserImporting = false;
-    await this.pushCurrentState(true);
+    return await this.pushCurrentState(true);
   }
 
   private startBackgroundPolling() {
@@ -574,14 +574,14 @@ class SyncClient {
     this.pushCurrentState(true);
   }
 
-  private async pushCurrentState(broadcastMutation = true) {
-    if (this.isUserImporting) return;
+  private async pushCurrentState(broadcastMutation = true): Promise<boolean> {
+    if (this.isUserImporting) return false;
 
     // Single-flight queue: if a push is already active, flag that a newer state
     // needs to be sent as soon as it completes, and return immediately.
     if (this.isPushing) {
       this.hasPendingPush = true;
-      return;
+      return true;
     }
 
     this.isPushing = true;
@@ -592,11 +592,11 @@ class SyncClient {
     if (this.watchDogTimer) clearTimeout(this.watchDogTimer);
     this.watchDogTimer = setTimeout(() => {
       if (this.uploadState === 'syncing') {
-        console.warn('[SyncClient] Push watchdog timeout reached (12s). Resetting to idle.');
+        console.warn('[SyncClient] Push watchdog timeout reached (45s). Resetting to idle.');
         this.setUploadState('idle');
         this.isPushing = false;
       }
-    }, 12000);
+    }, 45000);
 
     try {
       // 1. FAST-PATH: DELTA SYNC
@@ -652,7 +652,7 @@ class SyncClient {
                   this.setUploadState('idle');
                 }
               }, 2000);
-              return;
+              return true;
             }
           }
 
@@ -728,6 +728,7 @@ class SyncClient {
               this.setUploadState('idle');
             }
           }, 2000);
+          return true;
         } catch {
           pushedOverWs = false;
         }
@@ -766,7 +767,7 @@ class SyncClient {
         }
 
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 16000);
+        const timeoutId = setTimeout(() => controller.abort(), 35000);
 
         const res = await fetch('/api/sync/store', {
           method: 'POST',
@@ -782,7 +783,7 @@ class SyncClient {
           this.hasPendingPush = false;
           this.setUploadState('idle');
           await this.checkServerStoreHttp();
-          return;
+          return false;
         }
 
         if (res.ok) {
@@ -801,6 +802,7 @@ class SyncClient {
                 this.setUploadState('idle');
               }
             }, 2000);
+            return true;
           } else {
             console.warn('[SyncClient] Cloud store reported save failure:', json.error);
             this.setUploadState('error');
@@ -808,6 +810,7 @@ class SyncClient {
             this.errorResetTimer = setTimeout(() => {
               if (this.uploadState === 'error') this.setUploadState('idle');
             }, 4000);
+            return false;
           }
         } else {
           this.setUploadState('error');
@@ -815,8 +818,10 @@ class SyncClient {
           this.errorResetTimer = setTimeout(() => {
             if (this.uploadState === 'error') this.setUploadState('idle');
           }, 4000);
+          return false;
         }
       }
+      return false;
     } catch (err: any) {
       console.debug('[SyncClient] Push exception:', err);
       this.setUploadState('error');
@@ -824,6 +829,7 @@ class SyncClient {
       this.errorResetTimer = setTimeout(() => {
         if (this.uploadState === 'error') this.setUploadState('idle');
       }, 4000);
+      return false;
     } finally {
       if (this.watchDogTimer) clearTimeout(this.watchDogTimer);
       this.isPushing = false;

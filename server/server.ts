@@ -174,10 +174,31 @@ app.get('/api/sync/store', (req, res) => {
   res.json({ store: currentStore });
 });
 
-app.post('/api/sync/store', (req, res) => {
+app.post('/api/sync/store', async (req, res) => {
   let bodyData = req.body;
   if (typeof bodyData === 'string') {
     try { bodyData = JSON.parse(bodyData); } catch {}
+  }
+
+  // Decompress if client sent gzip-compressed snapshot
+  if (bodyData?.compressed && bodyData?.data) {
+    try {
+      let decompText = '';
+      if (typeof bodyData.data === 'string') {
+        const rawBuffer = Buffer.from(bodyData.data, 'base64');
+        const decompStream = new Blob([rawBuffer]).stream().pipeThrough(new DecompressionStream('gzip'));
+        decompText = await new Response(decompStream).text();
+      } else if (typeof bodyData.data === 'object') {
+        const values = Object.values(bodyData.data) as number[];
+        const rawBuffer = Buffer.from(values);
+        const decompStream = new Blob([rawBuffer]).stream().pipeThrough(new DecompressionStream('gzip'));
+        decompText = await new Response(decompStream).text();
+      }
+      bodyData = JSON.parse(decompText);
+    } catch (decompErr: any) {
+      console.error('[SyncServer] Decompression error:', decompErr);
+      return res.status(400).json({ error: 'Failed to decompress compressed sync payload' });
+    }
   }
 
   // 1. Delta Sync Mode

@@ -356,8 +356,12 @@ export const SettingsSyncModal: React.FC<SettingsSyncModalProps> = ({
         setImportStatus(`Successfully restored ${res.count} cards from backup! Syncing to cloud...`);
         setSnapshots(db.getSnapshots());
         setActiveThemeId(getActiveTheme());
-        await syncClient.resumeSyncAndPush();
-        setImportStatus(`Successfully restored ${res.count} cards from backup and synced to cloud!`);
+        const pushed = await syncClient.resumeSyncAndPush();
+        if (pushed) {
+          setImportStatus(`Successfully restored ${res.count} cards from backup and synced to cloud!`);
+        } else {
+          setImportStatus(`Restored ${res.count} cards locally. Syncing in background...`);
+        }
       } else {
         syncClient.resumeSync();
         playSound('error');
@@ -375,8 +379,12 @@ export const SettingsSyncModal: React.FC<SettingsSyncModalProps> = ({
       if (ok) {
         setImportStatus(`Restored snapshot: ${label}. Syncing...`);
         setSnapshots(db.getSnapshots());
-        await syncClient.resumeSyncAndPush();
-        setImportStatus(`Restored snapshot: ${label} and synced to cloud!`);
+        const pushed = await syncClient.resumeSyncAndPush();
+        if (pushed) {
+          setImportStatus(`Restored snapshot: ${label} and synced to cloud!`);
+        } else {
+          setImportStatus(`Restored snapshot: ${label} locally. Syncing in background...`);
+        }
       } else {
         syncClient.resumeSync();
       }

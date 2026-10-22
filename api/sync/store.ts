@@ -437,9 +437,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // Decompress if client sent gzip-compressed snapshot
       if (bodyData?.compressed && bodyData?.data) {
         try {
-          const rawBuffer = Buffer.from(bodyData.data, 'base64');
-          const decompStream = new Blob([rawBuffer]).stream().pipeThrough(new DecompressionStream('gzip'));
-          const decompText = await new Response(decompStream).text();
+          let decompText = '';
+          if (typeof bodyData.data === 'string') {
+            const rawBuffer = Buffer.from(bodyData.data, 'base64');
+            const decompStream = new Blob([rawBuffer]).stream().pipeThrough(new DecompressionStream('gzip'));
+            decompText = await new Response(decompStream).text();
+          } else if (typeof bodyData.data === 'object') {
+            const values = Object.values(bodyData.data) as number[];
+            const rawBuffer = Buffer.from(values);
+            const decompStream = new Blob([rawBuffer]).stream().pipeThrough(new DecompressionStream('gzip'));
+            decompText = await new Response(decompStream).text();
+          }
           bodyData = JSON.parse(decompText);
         } catch (decompErr: any) {
           console.error('[store] Decompression error:', decompErr);
