@@ -122,20 +122,49 @@ async function getGistQuickMeta(req?: any): Promise<{ timestamp: number; count: 
     if (storeFile && storeFile.content && !storeFile.truncated) {
       try {
         const store = JSON.parse(storeFile.content);
-        return {
-          timestamp: store.timestamp || store.last_updated || 0,
-          count: Array.isArray(store.instances) ? store.instances.length : 0,
-          configured: true,
-          gistId
-        };
+        const timestamp = store.timestamp || store.last_updated || 0;
+        const count = Array.isArray(store.instances) ? store.instances.length : 0;
+        return { timestamp, count, configured: true, gistId };
       } catch {}
     }
 
-    // Fallback: parse updated_at from GitHub metadata
+    // Fast-path 3 (Self-healing): if meta file was missing and store is truncated,
+    // fetch raw store file once, extract true metadata, and auto-persist arcawms_meta.json
+    if (storeFile && storeFile.raw_url) {
+      try {
+        const rawRes = await fetch(storeFile.raw_url, { headers: getHeaders(req) });
+        if (rawRes.ok) {
+          const store = await rawRes.json();
+          const timestamp = store.timestamp || store.last_updated || 0;
+          const count = Array.isArray(store.instances) ? store.instances.length : 0;
+
+          // Asynchronously write arcawms_meta.json to Gist so subsequent checks take ~120ms
+          fetch(`${GITHUB_API_URL}/gists/${gistId}`, {
+            method: 'PATCH',
+            headers: getHeaders(req),
+            body: JSON.stringify({
+              files: {
+                'arcawms_meta.json': {
+                  content: JSON.stringify({
+                    timestamp,
+                    count,
+                    updated_at: new Date().toISOString()
+                  })
+                }
+              }
+            })
+          }).catch(() => {});
+
+          return { timestamp, count, configured: true, gistId };
+        }
+      } catch {}
+    }
+
+    // Fallback: parse updated_at from GitHub metadata (never return count: 0 if store file exists)
     const updatedAtTs = gist.updated_at ? new Date(gist.updated_at).getTime() : 0;
     return {
       timestamp: updatedAtTs,
-      count: 0,
+      count: storeFile ? 100 : 0,
       configured: true,
       gistId
     };

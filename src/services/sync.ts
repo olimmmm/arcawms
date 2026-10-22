@@ -73,9 +73,14 @@ class SyncClient {
   private broadcastChannel: BroadcastChannel | null = null;
   private isProcessingRemoteUpdate = false;
   private isUserImporting = false;
+  private isPushing = false;
+  private hasPendingPush = false;
+  private isCheckingServer = false;
   private reconnectTimer: any = null;
   private pushDebounceTimer: any = null;
   private syncedResetTimer: any = null;
+  private errorResetTimer: any = null;
+  private watchDogTimer: any = null;
   private pingTimer: any = null;
   private pollTimer: any = null;
   private wsFailCount = 0;
@@ -99,14 +104,14 @@ class SyncClient {
 
   private startBackgroundPolling() {
     this.stopBackgroundPolling();
-    // In serverless environments without persistent WebSockets, poll lightweight metadata every 10s
+    // In serverless environments without persistent WebSockets, poll lightweight metadata every 5s while tab is visible
     this.pollTimer = setInterval(() => {
       if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
         if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
           this.checkServerStoreHttp();
         }
       }
-    }, 10000);
+    }, 5000);
   }
 
   private stopBackgroundPolling() {
@@ -181,39 +186,70 @@ class SyncClient {
   }
 
   private async checkServerStoreHttp() {
-    if (this.isUserImporting) return;
+    if (this.isUserImporting || this.isCheckingServer) return;
+    this.isCheckingServer = true;
     try {
       await db.whenHydrated();
       if (this.isUserImporting) return;
-      // Bandwidth optimization: check lightweight metadata (~50B) first instead of downloading full store (MBs)
-      const res = await fetch('/api/sync/meta', { headers: getSyncHeaders() });
+
+      const metaController = new AbortController();
+      const metaTimeout = setTimeout(() => metaController.abort(), 8000);
+
+      const res = await fetch('/api/sync/meta', { 
+        headers: getSyncHeaders(),
+        signal: metaController.signal
+      });
+      clearTimeout(metaTimeout);
+
       if (res.ok) {
         const meta = await res.json();
+
+        // Auto-cache gistId if server resolved it and it's not saved locally yet
+        if (meta?.gistId && db.getSettings().gistId !== meta.gistId) {
+          db.updateSettings({ gistId: meta.gistId });
+        }
+
         const localTs = parseTimestamp(db.getLastUpdated());
         const remoteTs = parseTimestamp(meta?.timestamp);
         const localCount = db.getAllInstances().length;
         const remoteCount = meta?.count || 0;
 
-        if (localCount >= 50 && remoteCount <= 28) {
+        // Guard: Cold server container vs established local.
+        // ONLY trigger on initial startup if server is completely uninitialized (remoteTs === 0).
+        if (localCount >= 50 && remoteCount <= 28 && remoteTs === 0) {
           this.schedulePush(200);
           return;
         }
 
         // Only download full JSON store if server is actually newer!
         if (remoteTs > localTs) {
-          const storeRes = await fetch('/api/sync/store', { headers: getSyncHeaders() });
+          const storeController = new AbortController();
+          const storeTimeout = setTimeout(() => storeController.abort(), 15000);
+
+          const storeRes = await fetch('/api/sync/store', { 
+            headers: getSyncHeaders(),
+            signal: storeController.signal
+          });
+          clearTimeout(storeTimeout);
+
           if (storeRes.ok) {
             const data = await storeRes.json();
+            if (data?.gistId && db.getSettings().gistId !== data.gistId) {
+              db.updateSettings({ gistId: data.gistId });
+            }
             if (data?.store) {
               this.reconcileWithServer(data.store);
             }
           }
-        } else if (localTs > remoteTs) {
-          this.schedulePush(200);
         }
+        // NOTE: We deliberately do NOT schedule a push here if localTs > remoteTs.
+        // Legitimate user actions already schedule pushes via db.subscribe().
+        // Pushing from a background poll creates infinite upload loops!
       }
     } catch {
       // Offline or network error
+    } finally {
+      this.isCheckingServer = false;
     }
   }
 
@@ -422,9 +458,9 @@ class SyncClient {
       if (remoteStore.settings?.theme) {
         applyTheme(remoteStore.settings.theme as GuildThemeId);
       }
-      db.importJSON(JSON.stringify(remoteStore), remoteTs);
+      db.importJSON(remoteStore, remoteTs);
     } finally {
-      setTimeout(() => { this.isProcessingRemoteUpdate = false; }, 100);
+      setTimeout(() => { this.isProcessingRemoteUpdate = false; }, 250);
     }
   }
 
@@ -453,7 +489,8 @@ class SyncClient {
     }
   }
 
-  private schedulePush(delay = 100) {
+  private schedulePush(delay = 120) {
+    if (this.isUserImporting) return;
     if (this.pushDebounceTimer) clearTimeout(this.pushDebounceTimer);
     this.pushDebounceTimer = setTimeout(() => {
       this.pushDebounceTimer = null;
@@ -470,65 +507,93 @@ class SyncClient {
   }
 
   private async pushCurrentState(broadcastMutation = true) {
+    if (this.isUserImporting) return;
+
+    // Single-flight queue: if a push is already active, flag that a newer state
+    // needs to be sent as soon as it completes, and return immediately.
+    if (this.isPushing) {
+      this.hasPendingPush = true;
+      return;
+    }
+
+    this.isPushing = true;
+    this.hasPendingPush = false;
     this.setUploadState('syncing');
 
-    const { githubToken, gistId, ...safeSettings } = db.getSettings();
-
-    const payload = {
-      instances: db.getAllInstances(),
-      cards: db.getAllCards(),
-      custom_lists: db.getCustomLists(),
-      history: db.getHistory(),
-      settings: safeSettings,
-      timestamp: db.getLastUpdated()
-    };
-
-    // 1. Multi-tab broadcast
-    if (this.broadcastChannel && broadcastMutation) {
-      try {
-        this.broadcastChannel.postMessage({
-          type: 'TAB_MUTATION',
-          payload,
-          clientId: CLIENT_ID
-        });
-      } catch {}
-    }
-
-    // 2. WebSocket push (real-time cross-device)
-    let pushedOverWs = false;
-    if (this.ws && this.ws.readyState === WebSocket.OPEN && broadcastMutation) {
-      try {
-        this.ws.send(JSON.stringify({
-          type: 'STATE_UPDATE',
-          payload,
-          clientId: CLIENT_ID
-        }));
-        pushedOverWs = true;
-        this.setUploadState('synced');
-        if (this.syncedResetTimer) clearTimeout(this.syncedResetTimer);
-        this.syncedResetTimer = setTimeout(() => {
-          if (this.uploadState === 'synced') {
-            this.setUploadState('idle');
-          }
-        }, 3000);
-      } catch {
-        pushedOverWs = false;
+    // Watchdog timer: safety net so UI is NEVER permanently stuck in 'syncing'
+    if (this.watchDogTimer) clearTimeout(this.watchDogTimer);
+    this.watchDogTimer = setTimeout(() => {
+      if (this.uploadState === 'syncing') {
+        console.warn('[SyncClient] Push watchdog timeout reached (18s). Resetting to idle.');
+        this.setUploadState('idle');
+        this.isPushing = false;
       }
-    }
+    }, 18000);
 
-    // 3. Reliable HTTP POST fallback: only send if WebSocket is NOT connected, or on explicit unload
-    if (!pushedOverWs) {
-      try {
+    try {
+      const { githubToken, gistId, ...safeSettings } = db.getSettings();
+
+      const payload = {
+        instances: db.getAllInstances(),
+        cards: db.getAllCards(),
+        custom_lists: db.getCustomLists(),
+        history: db.getHistory().slice(0, 50),
+        settings: safeSettings,
+        timestamp: db.getLastUpdated()
+      };
+
+      // 1. Multi-tab broadcast
+      if (this.broadcastChannel && broadcastMutation) {
+        try {
+          this.broadcastChannel.postMessage({
+            type: 'TAB_MUTATION',
+            payload,
+            clientId: CLIENT_ID
+          });
+        } catch {}
+      }
+
+      // 2. WebSocket push (real-time cross-device)
+      let pushedOverWs = false;
+      if (this.ws && this.ws.readyState === WebSocket.OPEN && broadcastMutation) {
+        try {
+          this.ws.send(JSON.stringify({
+            type: 'STATE_UPDATE',
+            payload,
+            clientId: CLIENT_ID
+          }));
+          pushedOverWs = true;
+          this.setUploadState('synced');
+          if (this.syncedResetTimer) clearTimeout(this.syncedResetTimer);
+          this.syncedResetTimer = setTimeout(() => {
+            if (this.uploadState === 'synced') {
+              this.setUploadState('idle');
+            }
+          }, 3000);
+        } catch {
+          pushedOverWs = false;
+        }
+      }
+
+      // 3. Reliable HTTP POST fallback: only send if WebSocket is NOT connected, or on explicit unload
+      if (!pushedOverWs) {
         const body = JSON.stringify({ 
           store: payload, 
           clientId: CLIENT_ID, 
           broadcastMutation 
         });
+
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 15000);
+
         const res = await fetch('/api/sync/store', {
           method: 'POST',
           headers: getSyncHeaders(),
-          body
+          body,
+          signal: controller.signal
         });
+        clearTimeout(timeoutId);
+
         if (res.status === 409) {
           // Conflict: Server has newer updates from another device! Pull newer changes
           console.log('[SyncClient] Server has newer changes from another device. Syncing down...');
@@ -536,8 +601,14 @@ class SyncClient {
           await this.checkServerStoreHttp();
           return;
         }
+
         if (res.ok) {
           const json = await res.json().catch(() => ({}));
+          // Auto-cache gistId if returned from server
+          if (json?.gistId && db.getSettings().gistId !== json.gistId) {
+            db.updateSettings({ gistId: json.gistId });
+          }
+
           if (json.success !== false) {
             this.setUploadState('synced');
             if (this.syncedResetTimer) clearTimeout(this.syncedResetTimer);
@@ -549,13 +620,32 @@ class SyncClient {
           } else {
             console.warn('[SyncClient] Cloud store reported save failure:', json.error);
             this.setUploadState('error');
+            if (this.errorResetTimer) clearTimeout(this.errorResetTimer);
+            this.errorResetTimer = setTimeout(() => {
+              if (this.uploadState === 'error') this.setUploadState('idle');
+            }, 4000);
           }
         } else {
           this.setUploadState('error');
+          if (this.errorResetTimer) clearTimeout(this.errorResetTimer);
+          this.errorResetTimer = setTimeout(() => {
+            if (this.uploadState === 'error') this.setUploadState('idle');
+          }, 4000);
         }
-      } catch (err) {
-        console.debug('[SyncClient] Push exception:', err);
-        this.setUploadState('error');
+      }
+    } catch (err: any) {
+      console.debug('[SyncClient] Push exception:', err);
+      this.setUploadState('error');
+      if (this.errorResetTimer) clearTimeout(this.errorResetTimer);
+      this.errorResetTimer = setTimeout(() => {
+        if (this.uploadState === 'error') this.setUploadState('idle');
+      }, 4000);
+    } finally {
+      if (this.watchDogTimer) clearTimeout(this.watchDogTimer);
+      this.isPushing = false;
+      // If another mutation arrived while pushing, dispatch the next push immediately
+      if (this.hasPendingPush) {
+        this.schedulePush(50);
       }
     }
   }

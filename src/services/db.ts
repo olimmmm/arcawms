@@ -1622,6 +1622,9 @@ class ArcaDatabase {
       timestamp: new Date().toISOString()
     };
     this.history.unshift(newEntry);
+    if (this.history.length > 100) {
+      this.history.length = 100;
+    }
     this.saveHistory();
   }
 
@@ -2116,17 +2119,22 @@ class ArcaDatabase {
     }, null, 2);
   }
 
-  public importJSON(jsonStr: string, remoteTimestamp?: number): { success: boolean; count: number; error?: string } {
+  public importJSON(jsonInput: string | any, remoteTimestamp?: number): { success: boolean; count: number; error?: string } {
     try {
-      if (!jsonStr || typeof jsonStr !== 'string') {
-        return { success: false, count: 0, error: 'Empty or invalid backup data' };
-      }
-
       let data: any;
-      try {
-        data = JSON.parse(jsonStr);
-      } catch (parseErr: any) {
-        return { success: false, count: 0, error: `Invalid JSON format: ${parseErr.message}` };
+      if (typeof jsonInput === 'string') {
+        if (!jsonInput.trim()) {
+          return { success: false, count: 0, error: 'Empty or invalid backup data' };
+        }
+        try {
+          data = JSON.parse(jsonInput);
+        } catch (parseErr: any) {
+          return { success: false, count: 0, error: `Invalid JSON format: ${parseErr.message}` };
+        }
+      } else if (jsonInput && typeof jsonInput === 'object') {
+        data = jsonInput;
+      } else {
+        return { success: false, count: 0, error: 'Empty or invalid backup data' };
       }
 
       if (!data || typeof data !== 'object') {
@@ -2285,8 +2293,8 @@ class ArcaDatabase {
         unitCount: targetUnitCount
       });
 
-      // 6. Pre-import snapshot for instant rollback protection
-      if (this.instances.size > 0) {
+      // 6. Pre-import snapshot for instant rollback protection (only for deliberate user file restores)
+      if (!remoteTimestamp && this.instances.size > 0) {
         this.saveSnapshot(`Backup before import (${this.instances.size} cards)`);
       }
 

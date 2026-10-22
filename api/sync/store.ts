@@ -139,8 +139,7 @@ async function loadGistStore(req?: any): Promise<any | null> {
   return null;
 }
 
-async function getGistQuickMeta(req?: any): Promise<{ timestamp: number; count: number } | null> {
-  const gistId = await getGistId(req);
+async function getGistQuickMeta(gistId: string, req?: any): Promise<{ timestamp: number; count: number } | null> {
   if (!gistId) return null;
 
   try {
@@ -160,8 +159,7 @@ async function getGistQuickMeta(req?: any): Promise<{ timestamp: number; count: 
   return null;
 }
 
-async function saveGistStore(data: any, req?: any): Promise<{ success: boolean; error?: string }> {
-  const gistId = await getGistId(req);
+async function saveGistStore(data: any, gistId: string, req?: any): Promise<{ success: boolean; error?: string }> {
   if (!gistId) return { success: false, error: 'No Gist ID available' };
 
   try {
@@ -222,9 +220,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(200).end();
     }
 
+    const gistId = await getGistId(req);
+
     if (req.method === 'GET') {
       const store = await loadGistStore(req);
-      return res.status(200).json({ store });
+      return res.status(200).json({ store, gistId });
     }
 
     if (req.method === 'POST') {
@@ -237,25 +237,32 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
 
       if (storeData && Array.isArray(storeData.instances)) {
+        if (!gistId) {
+          return res.status(400).json({ success: false, error: 'No Gist ID available' });
+        }
+
         const incomingTs = storeData.timestamp || storeData.last_updated || 0;
 
         // Stale timestamp conflict check: prevent an older device from wiping a newer cloud store
-        const existingMeta = await getGistQuickMeta(req);
+        const existingMeta = await getGistQuickMeta(gistId, req);
         if (existingMeta && existingMeta.timestamp > incomingTs) {
           return res.status(409).json({ 
             success: false, 
             conflict: true, 
             serverTimestamp: existingMeta.timestamp, 
-            clientTimestamp: incomingTs 
+            clientTimestamp: incomingTs,
+            gistId
           });
         }
 
-        const result = await saveGistStore(storeData, req);
+        const result = await saveGistStore(storeData, gistId, req);
         if (!result.success) {
-          return res.status(502).json({ success: false, error: result.error });
+          return res.status(502).json({ success: false, error: result.error, gistId });
         }
-        return res.status(200).json({ success: true, timestamp: incomingTs });
+        return res.status(200).json({ success: true, timestamp: incomingTs, gistId });
       }
+      return res.status(400).json({ error: 'Missing or invalid store data' });
+    }
       return res.status(400).json({ error: 'Missing or invalid store data' });
     }
 
