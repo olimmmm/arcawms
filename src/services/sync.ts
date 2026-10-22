@@ -77,6 +77,7 @@ class SyncClient {
   private pushDebounceTimer: any = null;
   private syncedResetTimer: any = null;
   private pingTimer: any = null;
+  private pollTimer: any = null;
   private wsFailCount = 0;
 
   public pauseSyncForImport() {
@@ -96,6 +97,25 @@ class SyncClient {
     await this.pushCurrentState(true);
   }
 
+  private startBackgroundPolling() {
+    this.stopBackgroundPolling();
+    // In serverless environments without persistent WebSockets, poll lightweight metadata every 10s
+    this.pollTimer = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+          this.checkServerStoreHttp();
+        }
+      }
+    }, 10000);
+  }
+
+  private stopBackgroundPolling() {
+    if (this.pollTimer) {
+      clearInterval(this.pollTimer);
+      this.pollTimer = null;
+    }
+  }
+
   constructor() {
     if (typeof window !== 'undefined') {
       try {
@@ -111,18 +131,26 @@ class SyncClient {
         console.warn('BroadcastChannel not supported:', e);
       }
 
-      // Query server state on startup to passively reconcile timestamps
-      this.checkServerStoreHttp();
+      // Start background polling for cross-device updates in serverless mode
+      this.startBackgroundPolling();
 
-      // Connect WebSocket for real-time multi-device sync
+      // Connect WebSocket for real-time local/LAN multi-device sync
       this.connect();
 
-      // Listen to local DB changes to push mutations to sync server & other devices
-      db.subscribe(() => {
-        if (!this.isProcessingRemoteUpdate) {
-          this.setUploadState('syncing');
-          this.schedulePush(100);
-        }
+      // CRITICAL: Await database hydration before checking server or attaching mutation listener.
+      // This prevents the initial database load on boot from being treated as a local mutation
+      // and overwriting newer cloud data from another device!
+      db.whenHydrated().then(async () => {
+        // Step 1: Reconcile with cloud store on boot BEFORE listening to any local mutations
+        await this.checkServerStoreHttp();
+
+        // Step 2: Now that hydration and initial server check are done, listen for legitimate user mutations
+        db.subscribe(() => {
+          if (!this.isProcessingRemoteUpdate && !this.isUserImporting) {
+            this.setUploadState('syncing');
+            this.schedulePush(100);
+          }
+        });
       });
 
       // Flushes any pending mutation immediately if the user reloads or navigates away
@@ -142,7 +170,9 @@ class SyncClient {
       document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'hidden') {
           flushOnUnload();
+          this.stopBackgroundPolling();
         } else if (document.visibilityState === 'visible') {
+          this.startBackgroundPolling();
           // Re-check cloud store on window focus for instant cross-device sync
           this.checkServerStoreHttp();
         }
@@ -499,14 +529,27 @@ class SyncClient {
           headers: getSyncHeaders(),
           body
         });
+        if (res.status === 409) {
+          // Conflict: Server has newer updates from another device! Pull newer changes
+          console.log('[SyncClient] Server has newer changes from another device. Syncing down...');
+          this.setUploadState('idle');
+          await this.checkServerStoreHttp();
+          return;
+        }
         if (res.ok) {
-          this.setUploadState('synced');
-          if (this.syncedResetTimer) clearTimeout(this.syncedResetTimer);
-          this.syncedResetTimer = setTimeout(() => {
-            if (this.uploadState === 'synced') {
-              this.setUploadState('idle');
-            }
-          }, 3000);
+          const json = await res.json().catch(() => ({}));
+          if (json.success !== false) {
+            this.setUploadState('synced');
+            if (this.syncedResetTimer) clearTimeout(this.syncedResetTimer);
+            this.syncedResetTimer = setTimeout(() => {
+              if (this.uploadState === 'synced') {
+                this.setUploadState('idle');
+              }
+            }, 3000);
+          } else {
+            console.warn('[SyncClient] Cloud store reported save failure:', json.error);
+            this.setUploadState('error');
+          }
         } else {
           this.setUploadState('error');
         }

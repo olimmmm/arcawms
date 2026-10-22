@@ -83,34 +83,66 @@ async function getGistId(req?: any): Promise<string | null> {
   return null;
 }
 
-async function loadGistStore(req?: any): Promise<any | null> {
+async function getGistQuickMeta(req?: any): Promise<{ timestamp: number; count: number; configured: boolean; gistId: string | null }> {
+  const token = getToken(req);
+  const configured = Boolean(token);
   const gistId = await getGistId(req);
-  if (!gistId) return null;
+
+  if (!configured || !gistId) {
+    return { timestamp: 0, count: 0, configured: false, gistId: null };
+  }
 
   try {
     const res = await fetch(`${GITHUB_API_URL}/gists/${gistId}`, {
       headers: getHeaders(req)
     });
 
-    if (!res.ok) return null;
+    if (!res.ok) {
+      return { timestamp: 0, count: 0, configured: true, gistId };
+    }
 
     const gist = await res.json();
-    const file = gist.files && gist.files[GIST_FILENAME];
-    if (!file) return null;
 
-    let content = file.content;
-    if (file.truncated && file.raw_url) {
-      const rawRes = await fetch(file.raw_url, { headers: getHeaders(req) });
-      if (rawRes.ok) content = await rawRes.text();
+    // Fast-path 1: read lightweight arcawms_meta.json directly from Gist metadata
+    const metaFile = gist.files && gist.files['arcawms_meta.json'];
+    if (metaFile && metaFile.content) {
+      try {
+        const meta = JSON.parse(metaFile.content);
+        return {
+          timestamp: meta.timestamp || 0,
+          count: meta.count || 0,
+          configured: true,
+          gistId
+        };
+      } catch {}
     }
 
-    if (content) {
-      return JSON.parse(content);
+    // Fast-path 2: if store file is not truncated, read timestamp directly from gist response
+    const storeFile = gist.files && gist.files[GIST_FILENAME];
+    if (storeFile && storeFile.content && !storeFile.truncated) {
+      try {
+        const store = JSON.parse(storeFile.content);
+        return {
+          timestamp: store.timestamp || store.last_updated || 0,
+          count: Array.isArray(store.instances) ? store.instances.length : 0,
+          configured: true,
+          gistId
+        };
+      } catch {}
     }
+
+    // Fallback: parse updated_at from GitHub metadata
+    const updatedAtTs = gist.updated_at ? new Date(gist.updated_at).getTime() : 0;
+    return {
+      timestamp: updatedAtTs,
+      count: 0,
+      configured: true,
+      gistId
+    };
   } catch (err) {
-    console.error('[Vercel Gist] Error loading store:', err);
+    console.error('[Vercel Gist] Error reading fast meta:', err);
+    return { timestamp: 0, count: 0, configured: true, gistId };
   }
-  return null;
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -123,25 +155,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(200).end();
     }
 
-    const token = getToken(req);
-    const configured = Boolean(token);
-    const gistId = await getGistId(req);
-
-    if (!configured || !gistId) {
-      return res.status(200).json({ timestamp: 0, count: 0, configured: false, gistId: null });
-    }
-
-    const store = await loadGistStore(req);
-    if (!store) {
-      return res.status(200).json({ timestamp: 0, count: 0, configured: true, gistId });
-    }
-
-    return res.status(200).json({
-      timestamp: store.timestamp || store.last_updated || 0,
-      count: Array.isArray(store.instances) ? store.instances.length : 0,
-      configured: true,
-      gistId
-    });
+    const meta = await getGistQuickMeta(req);
+    return res.status(200).json(meta);
   } catch (err: any) {
     console.error('[meta] Handler error:', err);
     return res.status(200).json({

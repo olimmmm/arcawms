@@ -139,9 +139,30 @@ async function loadGistStore(req?: any): Promise<any | null> {
   return null;
 }
 
-async function saveGistStore(data: any, req?: any): Promise<boolean> {
+async function getGistQuickMeta(req?: any): Promise<{ timestamp: number; count: number } | null> {
   const gistId = await getGistId(req);
-  if (!gistId) return false;
+  if (!gistId) return null;
+
+  try {
+    const res = await fetch(`${GITHUB_API_URL}/gists/${gistId}`, {
+      headers: getHeaders(req)
+    });
+    if (!res.ok) return null;
+    const gist = await res.json();
+    const metaFile = gist.files && gist.files['arcawms_meta.json'];
+    if (metaFile && metaFile.content) {
+      try {
+        const meta = JSON.parse(metaFile.content);
+        return { timestamp: meta.timestamp || 0, count: meta.count || 0 };
+      } catch {}
+    }
+  } catch {}
+  return null;
+}
+
+async function saveGistStore(data: any, req?: any): Promise<{ success: boolean; error?: string }> {
+  const gistId = await getGistId(req);
+  if (!gistId) return { success: false, error: 'No Gist ID available' };
 
   try {
     // SECURITY: Ensure no secrets or tokens are ever written to the Gist store!
@@ -150,9 +171,20 @@ async function saveGistStore(data: any, req?: any): Promise<boolean> {
       data.settings = safeSettings;
     }
 
+    const timestamp = data.timestamp || data.last_updated || Date.now();
+    const count = Array.isArray(data.instances) ? data.instances.length : 0;
+    const metaContent = JSON.stringify({
+      timestamp,
+      count,
+      updated_at: new Date().toISOString()
+    });
+
     const body = JSON.stringify({
       description: GIST_DESCRIPTION,
       files: {
+        'arcawms_meta.json': {
+          content: metaContent
+        },
         [GIST_FILENAME]: {
           content: JSON.stringify(data)
         }
@@ -165,10 +197,18 @@ async function saveGistStore(data: any, req?: any): Promise<boolean> {
       body
     });
 
-    return res.ok;
-  } catch (err) {
+    if (!res.ok) {
+      const errData: any = await res.json().catch(() => ({}));
+      return { 
+        success: false, 
+        error: `GitHub PATCH error (${res.status}): ${errData?.message || res.statusText}` 
+      };
+    }
+
+    return { success: true };
+  } catch (err: any) {
     console.error('[Vercel Gist] Error saving store:', err);
-    return false;
+    return { success: false, error: err?.message || String(err) };
   }
 }
 
@@ -188,10 +228,33 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (req.method === 'POST') {
-      const { store } = req.body || {};
-      if (store && Array.isArray(store.instances)) {
-        const saved = await saveGistStore(store, req);
-        return res.status(200).json({ success: saved, timestamp: store.timestamp || 0 });
+      let storeData = req.body?.store;
+      if (!storeData && typeof req.body === 'string') {
+        try {
+          const parsed = JSON.parse(req.body);
+          storeData = parsed.store;
+        } catch {}
+      }
+
+      if (storeData && Array.isArray(storeData.instances)) {
+        const incomingTs = storeData.timestamp || storeData.last_updated || 0;
+
+        // Stale timestamp conflict check: prevent an older device from wiping a newer cloud store
+        const existingMeta = await getGistQuickMeta(req);
+        if (existingMeta && existingMeta.timestamp > incomingTs) {
+          return res.status(409).json({ 
+            success: false, 
+            conflict: true, 
+            serverTimestamp: existingMeta.timestamp, 
+            clientTimestamp: incomingTs 
+          });
+        }
+
+        const result = await saveGistStore(storeData, req);
+        if (!result.success) {
+          return res.status(502).json({ success: false, error: result.error });
+        }
+        return res.status(200).json({ success: true, timestamp: incomingTs });
       }
       return res.status(400).json({ error: 'Missing or invalid store data' });
     }

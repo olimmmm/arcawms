@@ -89,6 +89,10 @@ export const SettingsSyncModal: React.FC<SettingsSyncModalProps> = ({
       if (res.ok) {
         const data = await res.json();
         setCloudStatus(data);
+        if (data.configured && data.gistId && !db.getSettings().gistId) {
+          db.updateSettings({ gistId: data.gistId });
+          setGistIdInput(data.gistId);
+        }
       } else {
         setCloudStatus(null);
       }
@@ -140,6 +144,10 @@ export const SettingsSyncModal: React.FC<SettingsSyncModalProps> = ({
         setCloudStatus(data);
         if (data.configured) {
           playSound('success');
+          if (data.gistId) {
+            db.updateSettings({ gistId: data.gistId });
+            setGistIdInput(data.gistId);
+          }
           setCloudMessage({ 
             type: 'success', 
             text: `Connected! Using Gist ${data.gistId ? `${data.gistId.slice(0, 8)}...` : 'active'}` 
