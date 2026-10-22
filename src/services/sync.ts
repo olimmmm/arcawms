@@ -1,6 +1,6 @@
 import { db } from './db';
 import { applyTheme, GuildThemeId } from './theme';
-import { compressGzip, isGzipSupported } from './compression';
+import { compressGzip, decompressGzip, isGzipSupported } from './compression';
 
 export type SyncStatus = 'connected' | 'connecting' | 'disconnected' | 'error';
 export type CloudUploadState = 'idle' | 'syncing' | 'synced' | 'error';
@@ -477,9 +477,22 @@ class SyncClient {
    * Passive handshake with the server on boot/connection.
    * Compares timestamps without blasting out mutations to active clients.
    */
-  private reconcileWithServer(remoteStore: any) {
+  private async reconcileWithServer(remoteStore: any) {
     if (this.isUserImporting) return;
-    if (!remoteStore || !Array.isArray(remoteStore.instances)) return;
+    if (!remoteStore) return;
+
+    // Handle compressed store payload if received from server
+    if (remoteStore.compressed && remoteStore.data) {
+      try {
+        const decompText = await decompressGzip(remoteStore.data);
+        remoteStore = JSON.parse(decompText);
+      } catch (err) {
+        console.error('[SyncClient] Error decompressing remote store:', err);
+        return;
+      }
+    }
+
+    if (!Array.isArray(remoteStore.instances)) return;
 
     const localCount = db.getAllInstances().length;
     const remoteCount = remoteStore.instances.length;

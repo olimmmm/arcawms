@@ -127,7 +127,7 @@ async function getGistQuickMeta(req?: any): Promise<{ timestamp: number; count: 
       try {
         const store = JSON.parse(storeFile.content);
         const timestamp = store.timestamp || store.last_updated || 0;
-        const count = Array.isArray(store.instances) ? store.instances.length : 0;
+        const count = typeof store.count === 'number' ? store.count : (Array.isArray(store.instances) ? store.instances.length : 0);
         return { timestamp, count, configured: true, gistId };
       } catch {}
     }
@@ -140,7 +140,7 @@ async function getGistQuickMeta(req?: any): Promise<{ timestamp: number; count: 
         if (rawRes.ok) {
           const store = await rawRes.json();
           const timestamp = store.timestamp || store.last_updated || 0;
-          const count = Array.isArray(store.instances) ? store.instances.length : 0;
+          const count = typeof store.count === 'number' ? store.count : (Array.isArray(store.instances) ? store.instances.length : 0);
 
           // Asynchronously write arcawms_meta.json to Gist so subsequent checks take ~120ms
           fetch(`${GITHUB_API_URL}/gists/${gistId}`, {

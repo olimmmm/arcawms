@@ -180,7 +180,19 @@ async function loadGistStore(req?: any): Promise<any | null> {
     }
 
     if (content) {
-      const store = JSON.parse(content);
+      let store = JSON.parse(content);
+
+      // If store was compressed for storage in Gist, decompress it
+      if (store && store.compressed && store.data) {
+        try {
+          const rawBuffer = Buffer.from(store.data, 'base64');
+          const decompStream = new Blob([rawBuffer]).stream().pipeThrough(new DecompressionStream('gzip'));
+          const decompText = await new Response(decompStream).text();
+          store = JSON.parse(decompText);
+        } catch (decompErr) {
+          console.error('[loadGistStore] Error decompressing store file:', decompErr);
+        }
+      }
 
       // Merge rolling deltas into snapshot so full store response is 100% current
       const deltasFile = gist.files && gist.files['arcawms_deltas.json'];
@@ -358,13 +370,37 @@ async function saveGistStore(data: any, gistId: string, req?: any): Promise<{ su
     }
 
     const timestamp = data.timestamp || data.last_updated || Date.now();
-    const count = Array.isArray(data.instances) ? data.instances.length : 0;
+    const count = typeof data.count === 'number' ? data.count : (Array.isArray(data.instances) ? data.instances.length : 0);
     const metaContent = JSON.stringify({
       timestamp,
       count,
       deltaCount: 0,
       updated_at: new Date().toISOString()
     });
+
+    let storeContent: string;
+    const rawString = typeof data === 'string' ? data : JSON.stringify(data);
+
+    // If snapshot is large (> 50 KB), compress it into Base64 Gzip so GitHub Gist commits in ~150ms without timeout!
+    if (rawString.length > 50 * 1024) {
+      try {
+        const stream = new Blob([rawString]).stream().pipeThrough(new CompressionStream('gzip'));
+        const buffer = await new Response(stream).arrayBuffer();
+        const base64 = Buffer.from(buffer).toString('base64');
+        storeContent = JSON.stringify({
+          compressed: true,
+          data: base64,
+          timestamp,
+          count
+        });
+        console.log(`[saveGistStore] Compressed store file from ${(rawString.length / 1024).toFixed(1)} KB to ${(storeContent.length / 1024).toFixed(1)} KB for fast Gist commit.`);
+      } catch (compErr) {
+        console.warn('[saveGistStore] Fallback to raw string due to compression error:', compErr);
+        storeContent = rawString;
+      }
+    } else {
+      storeContent = rawString;
+    }
 
     const body = JSON.stringify({
       description: GIST_DESCRIPTION,
@@ -376,7 +412,7 @@ async function saveGistStore(data: any, gistId: string, req?: any): Promise<{ su
           content: '[]'
         },
         [GIST_FILENAME]: {
-          content: typeof data === 'string' ? data : JSON.stringify(data)
+          content: storeContent
         }
       }
     });
