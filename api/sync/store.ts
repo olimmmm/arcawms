@@ -114,8 +114,11 @@ async function loadGistStore(req?: any): Promise<any | null> {
   if (!gistId) return null;
 
   try {
-    const res = await fetch(`${GITHUB_API_URL}/gists/${gistId}`, {
-      headers: getHeaders(req)
+    const res = await fetch(`${GITHUB_API_URL}/gists/${gistId}?_t=${Date.now()}`, {
+      headers: {
+        ...getHeaders(req),
+        'Cache-Control': 'no-cache, no-store'
+      }
     });
 
     if (!res.ok) return null;
@@ -126,7 +129,12 @@ async function loadGistStore(req?: any): Promise<any | null> {
 
     let content = file.content;
     if (file.truncated && file.raw_url) {
-      const rawRes = await fetch(file.raw_url, { headers: getHeaders(req) });
+      const rawRes = await fetch(file.raw_url, { 
+        headers: {
+          ...getHeaders(req),
+          'Cache-Control': 'no-cache, no-store'
+        }
+      });
       if (rawRes.ok) content = await rawRes.text();
     }
 
@@ -143,8 +151,11 @@ async function getGistQuickMeta(gistId: string, req?: any): Promise<{ timestamp:
   if (!gistId) return null;
 
   try {
-    const res = await fetch(`${GITHUB_API_URL}/gists/${gistId}`, {
-      headers: getHeaders(req)
+    const res = await fetch(`${GITHUB_API_URL}/gists/${gistId}?_t=${Date.now()}`, {
+      headers: {
+        ...getHeaders(req),
+        'Cache-Control': 'no-cache, no-store'
+      }
     });
     if (!res.ok) return null;
     const gist = await res.json();
@@ -215,6 +226,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-gist-id');
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
 
     if (req.method === 'OPTIONS') {
       return res.status(200).end();

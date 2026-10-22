@@ -93,8 +93,11 @@ async function getGistQuickMeta(req?: any): Promise<{ timestamp: number; count: 
   }
 
   try {
-    const res = await fetch(`${GITHUB_API_URL}/gists/${gistId}`, {
-      headers: getHeaders(req)
+    const res = await fetch(`${GITHUB_API_URL}/gists/${gistId}?_t=${Date.now()}`, {
+      headers: {
+        ...getHeaders(req),
+        'Cache-Control': 'no-cache, no-store'
+      }
     });
 
     if (!res.ok) {
@@ -179,6 +182,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-gist-id');
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
 
     if (req.method === 'OPTIONS') {
       return res.status(200).end();

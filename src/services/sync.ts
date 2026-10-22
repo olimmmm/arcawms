@@ -104,14 +104,14 @@ class SyncClient {
 
   private startBackgroundPolling() {
     this.stopBackgroundPolling();
-    // In serverless environments without persistent WebSockets, poll lightweight metadata every 5s while tab is visible
+    // In serverless environments without persistent WebSockets, poll lightweight metadata every 4s while tab is visible
     this.pollTimer = setInterval(() => {
       if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
         if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
           this.checkServerStoreHttp();
         }
       }
-    }, 5000);
+    }, 4000);
   }
 
   private stopBackgroundPolling() {
@@ -195,8 +195,9 @@ class SyncClient {
       const metaController = new AbortController();
       const metaTimeout = setTimeout(() => metaController.abort(), 8000);
 
-      const res = await fetch('/api/sync/meta', { 
+      const res = await fetch(`/api/sync/meta?_t=${Date.now()}`, { 
         headers: getSyncHeaders(),
+        cache: 'no-store',
         signal: metaController.signal
       });
       clearTimeout(metaTimeout);
@@ -224,10 +225,11 @@ class SyncClient {
         // Only download full JSON store if server is actually newer!
         if (remoteTs > localTs) {
           const storeController = new AbortController();
-          const storeTimeout = setTimeout(() => storeController.abort(), 15000);
+          const storeTimeout = setTimeout(() => storeController.abort(), 12000);
 
-          const storeRes = await fetch('/api/sync/store', { 
+          const storeRes = await fetch(`/api/sync/store?_t=${Date.now()}`, { 
             headers: getSyncHeaders(),
+            cache: 'no-store',
             signal: storeController.signal
           });
           clearTimeout(storeTimeout);
@@ -327,7 +329,7 @@ class SyncClient {
               const remoteCount = msg.count || 0;
 
               // Guard: Cold server container vs established local
-              if (localCount >= 50 && remoteCount <= 28) {
+              if (localCount >= 50 && remoteCount <= 28 && remoteTs === 0) {
                 this.schedulePush(200);
                 return;
               }
@@ -430,7 +432,7 @@ class SyncClient {
     // Guard 2: Protection against blank / default seed container wiping an established user collection
     // If local has an established collection (50+ cards) and remote is empty or default seed data (<= 28 cards),
     // never wipe local. Instead, seed the server container with the legitimate collection.
-    if (localCount >= 50 && remoteCount <= 28) {
+    if (localCount >= 50 && remoteCount <= 28 && remoteTs === 0) {
       console.warn(`[SyncClient] Remote store is an unseeded/cold container (${remoteCount} cards). Protecting local collection (${localCount} cards) and seeding server.`);
       this.pushCurrentState(false);
       return;
@@ -478,7 +480,7 @@ class SyncClient {
     const remoteCount = remotePayload.instances.length;
 
     // Safety guard against unseeded cold container broadcast
-    if (localCount >= 50 && remoteCount <= 28) {
+    if (localCount >= 50 && remoteCount <= 28 && remoteTs === 0) {
       return;
     }
 
@@ -524,20 +526,47 @@ class SyncClient {
     if (this.watchDogTimer) clearTimeout(this.watchDogTimer);
     this.watchDogTimer = setTimeout(() => {
       if (this.uploadState === 'syncing') {
-        console.warn('[SyncClient] Push watchdog timeout reached (18s). Resetting to idle.');
+        console.warn('[SyncClient] Push watchdog timeout reached (12s). Resetting to idle.');
         this.setUploadState('idle');
         this.isPushing = false;
       }
-    }, 18000);
+    }, 12000);
 
     try {
       const { githubToken, gistId, ...safeSettings } = db.getSettings();
 
+      const instances = db.getAllInstances();
+      const customLists = db.getCustomLists();
+      const history = db.getHistory().slice(0, 50);
+
+      // Collect all card names and oracle IDs in active inventory, custom lists, and history
+      const referencedNames = new Set<string>();
+      const referencedOracles = new Set<string>();
+      instances.forEach(inst => {
+        if (inst.card_name) referencedNames.add(inst.card_name.trim().toLowerCase());
+        if (inst.oracle_id) referencedOracles.add(inst.oracle_id);
+      });
+      customLists.forEach(list => {
+        list.items?.forEach(item => {
+          if (item.card_name) referencedNames.add(item.card_name.trim().toLowerCase());
+          if (item.oracle_id) referencedOracles.add(item.oracle_id);
+        });
+      });
+      history.forEach(item => {
+        if (item.card_name) referencedNames.add(item.card_name.trim().toLowerCase());
+      });
+
+      // Bandwidth optimization: sync only cards used in active collection (~35 KB),
+      // rather than the entire 5,000+ cached Scryfall search history (~2.85 MB)
+      const syncedCards = db.getAllCards().filter(card => 
+        referencedOracles.has(card.oracle_id) || referencedNames.has(card.name.trim().toLowerCase())
+      );
+
       const payload = {
-        instances: db.getAllInstances(),
-        cards: db.getAllCards(),
-        custom_lists: db.getCustomLists(),
-        history: db.getHistory().slice(0, 50),
+        instances,
+        cards: syncedCards,
+        custom_lists: customLists,
+        history,
         settings: safeSettings,
         timestamp: db.getLastUpdated()
       };
@@ -584,7 +613,7 @@ class SyncClient {
         });
 
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 15000);
+        const timeoutId = setTimeout(() => controller.abort(), 12000);
 
         const res = await fetch('/api/sync/store', {
           method: 'POST',
