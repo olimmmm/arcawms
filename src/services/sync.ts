@@ -88,6 +88,7 @@ class SyncClient {
 
   public pauseSyncForImport() {
     this.isUserImporting = true;
+    this.isPushing = false;
     if (this.pushDebounceTimer) {
       clearTimeout(this.pushDebounceTimer);
       this.pushDebounceTimer = null;
@@ -98,9 +99,11 @@ class SyncClient {
     this.isUserImporting = false;
   }
 
-  public async resumeSyncAndPush(): Promise<boolean> {
+  public async resumeSyncAndPush(): Promise<{ success: boolean; count: number; error?: string }> {
     this.isUserImporting = false;
-    return await this.pushCurrentState(true);
+    this.isPushing = false;
+    db.clearPendingDeltas();
+    return await this.pushCurrentState(true, true);
   }
 
   private startBackgroundPolling() {
@@ -290,7 +293,7 @@ class SyncClient {
           // FULL STORE FALLBACK: If delta sync had gaps or wasn't applicable
           if (!deltaSyncSucceeded) {
             const storeController = new AbortController();
-            const storeTimeout = setTimeout(() => storeController.abort(), 12000);
+            const storeTimeout = setTimeout(() => storeController.abort(), 30000);
 
             const storeRes = await fetch(`/api/sync/store?_t=${Date.now()}`, { 
               headers: getSyncHeaders(),
@@ -517,6 +520,15 @@ class SyncClient {
       return;
     }
 
+    // Guard 3: Protection against small/empty local device wiping a large remote collection on passive handshake!
+    // If remote has an established collection (100+ cards) and local has fewer cards (e.g. 28 cards),
+    // NEVER overwrite remote during passive reconcile! Always adopt remote!
+    if (remoteCount >= 100 && localCount < remoteCount * 0.75) {
+      console.warn(`[SyncClient] Remote collection is significantly larger (${remoteCount} vs local ${localCount} cards). Adopting server collection to protect against accidental overwrite.`);
+      this.applyRemoteStore(remoteStore, remoteTs);
+      return;
+    }
+
     // Primary Rule: TRUE TIMESTAMP WINS
     // All legitimate actions (adding cards, removing cards, swapping, moving locations)
     // update the timestamp. The newer timestamp accurately reflects the latest user intent.
@@ -525,6 +537,11 @@ class SyncClient {
       this.applyRemoteStore(remoteStore, remoteTs);
       return;
     } else if (localTs > remoteTs) {
+      // Safety guard: If remote has 100+ cards and local has less than half, NEVER overwrite remote on passive check!
+      if (remoteCount >= 100 && localCount < remoteCount * 0.5) {
+        console.warn(`[SyncClient] Local has fewer cards than remote (${localCount} vs ${remoteCount}). Suppressing passive overwrite.`);
+        return;
+      }
       console.log(`[SyncClient] Local timestamp is newer (${localTs} > ${remoteTs}). Updating server with local state (${localCount} cards).`);
       this.pushCurrentState(false);
       return;
@@ -587,14 +604,14 @@ class SyncClient {
     this.pushCurrentState(true);
   }
 
-  private async pushCurrentState(broadcastMutation = true): Promise<boolean> {
-    if (this.isUserImporting) return false;
+  private async pushCurrentState(broadcastMutation = true, forceSnapshot = false): Promise<{ success: boolean; count: number; error?: string }> {
+    if (this.isUserImporting) return { success: false, count: 0, error: 'Import in progress' };
 
     // Single-flight queue: if a push is already active, flag that a newer state
     // needs to be sent as soon as it completes, and return immediately.
     if (this.isPushing) {
       this.hasPendingPush = true;
-      return true;
+      return { success: true, count: db.getAllInstances().length };
     }
 
     this.isPushing = true;
@@ -613,11 +630,11 @@ class SyncClient {
 
     try {
       // 1. FAST-PATH: DELTA SYNC
-      // If we have pending deltas and fewer than 150 changes (typical everyday card actions),
+      // If not forced to full snapshot, and we have pending deltas under 150 changes,
       // send a tiny delta patch (~120 B - 2 KB) instead of full megabytes snapshot.
       const hasDeltas = db.hasPendingDeltas();
       const deltaCount = db.getPendingDeltaCount();
-      const isDeltaCandidate = hasDeltas && !this.isUserImporting && deltaCount <= 150;
+      const isDeltaCandidate = !forceSnapshot && hasDeltas && !this.isUserImporting && deltaCount <= 150;
 
       if (isDeltaCandidate) {
         const delta = db.extractPendingDelta(CLIENT_ID);
@@ -665,7 +682,7 @@ class SyncClient {
                   this.setUploadState('idle');
                 }
               }, 2000);
-              return true;
+              return { success: true, count: delta.count || db.getAllInstances().length };
             }
           }
 
@@ -741,7 +758,7 @@ class SyncClient {
               this.setUploadState('idle');
             }
           }, 2000);
-          return true;
+          return { success: true, count: instances.length };
         } catch {
           pushedOverWs = false;
         }
@@ -780,7 +797,7 @@ class SyncClient {
         }
 
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 35000);
+        const timeoutId = setTimeout(() => controller.abort(), 45000);
 
         const res = await fetch('/api/sync/store', {
           method: 'POST',
@@ -796,7 +813,7 @@ class SyncClient {
           this.hasPendingPush = false;
           this.setUploadState('idle');
           await this.checkServerStoreHttp();
-          return false;
+          return { success: false, count: instances.length, error: 'Server has newer changes from another device' };
         }
 
         if (res.ok) {
@@ -815,7 +832,7 @@ class SyncClient {
                 this.setUploadState('idle');
               }
             }, 2000);
-            return true;
+            return { success: true, count: instances.length };
           } else {
             console.warn('[SyncClient] Cloud store reported save failure:', json.error);
             this.setUploadState('error');
@@ -823,18 +840,25 @@ class SyncClient {
             this.errorResetTimer = setTimeout(() => {
               if (this.uploadState === 'error') this.setUploadState('idle');
             }, 4000);
-            return false;
+            return { success: false, count: instances.length, error: json.error || 'Server rejected store' };
           }
         } else {
+          const errText = await res.text().catch(() => '');
+          let errMsg = `Server HTTP ${res.status}`;
+          try {
+            const errJson = JSON.parse(errText);
+            if (errJson.error) errMsg += `: ${errJson.error}`;
+          } catch {}
+          console.warn('[SyncClient] Cloud store error:', errMsg);
           this.setUploadState('error');
           if (this.errorResetTimer) clearTimeout(this.errorResetTimer);
           this.errorResetTimer = setTimeout(() => {
             if (this.uploadState === 'error') this.setUploadState('idle');
           }, 4000);
-          return false;
+          return { success: false, count: instances.length, error: errMsg };
         }
       }
-      return false;
+      return { success: false, count: 0, error: 'Push failed to initiate' };
     } catch (err: any) {
       console.debug('[SyncClient] Push exception:', err);
       this.setUploadState('error');
@@ -842,7 +866,7 @@ class SyncClient {
       this.errorResetTimer = setTimeout(() => {
         if (this.uploadState === 'error') this.setUploadState('idle');
       }, 4000);
-      return false;
+      return { success: false, count: 0, error: err?.message || String(err) };
     } finally {
       if (this.watchDogTimer) clearTimeout(this.watchDogTimer);
       this.isPushing = false;

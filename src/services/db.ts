@@ -2055,6 +2055,7 @@ class ArcaDatabase {
       this.rebuildIndexes();
       this.saveInstances();
       this.saveCards();
+      this.clearPendingDeltas();
       this.touchUpdated();
       this.logActivity({
         type: 'added',
@@ -2380,6 +2381,9 @@ class ArcaDatabase {
       this.rebuildIndexes();
       this.saveInstances();
 
+      // Clear any pending delta mutations so an import is treated as a clean baseline
+      this.clearPendingDeltas();
+
       // If remoteTimestamp is passed, this import comes from an automated cloud sync.
       // If remoteTimestamp is omitted, this is a deliberate user-initiated backup restore.
       // Deliberate user restores MUST receive a fresh Date.now() timestamp so they take priority
@@ -2410,6 +2414,7 @@ class ArcaDatabase {
     this.saveInstances();
     this.saveCustomLists();
     this.saveHistory();
+    this.clearPendingDeltas();
     this.touchUpdated();
     this.notify();
   }
@@ -2545,8 +2550,8 @@ class ArcaDatabase {
 
       if (delta.timestamp && delta.timestamp > this.lastUpdated) {
         this.touchUpdated(delta.timestamp);
-      } else if (changesCount > 0) {
-        this.touchUpdated(this.lastUpdated + 1);
+      } else if (changesCount > 0 && typeof delta.timestamp === 'number') {
+        this.touchUpdated(delta.timestamp);
       }
 
       this.notify();

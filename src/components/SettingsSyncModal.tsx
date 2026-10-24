@@ -353,14 +353,15 @@ export const SettingsSyncModal: React.FC<SettingsSyncModalProps> = ({
       const res = db.importJSON(content);
       if (res.success) {
         playSound('success');
-        setImportStatus(`Successfully restored ${res.count} cards from backup! Syncing to cloud...`);
+        setImportStatus(`Restored ${res.count} cards locally. Syncing full snapshot to cloud...`);
         setSnapshots(db.getSnapshots());
         setActiveThemeId(getActiveTheme());
-        const pushed = await syncClient.resumeSyncAndPush();
-        if (pushed) {
+        const pushRes = await syncClient.resumeSyncAndPush();
+        if (pushRes.success) {
           setImportStatus(`Successfully restored ${res.count} cards from backup and synced to cloud!`);
         } else {
-          setImportStatus(`Restored ${res.count} cards locally. Syncing in background...`);
+          playSound('error');
+          setImportStatus(`Restored ${res.count} cards locally, but cloud sync failed: ${pushRes.error || 'Server rejected push'}. Check Settings > Cloud Sync.`);
         }
       } else {
         syncClient.resumeSync();
@@ -377,13 +378,14 @@ export const SettingsSyncModal: React.FC<SettingsSyncModalProps> = ({
       syncClient.pauseSyncForImport();
       const ok = db.restoreSnapshot(id);
       if (ok) {
-        setImportStatus(`Restored snapshot: ${label}. Syncing...`);
+        setImportStatus(`Restored snapshot: ${label}. Syncing full snapshot to cloud...`);
         setSnapshots(db.getSnapshots());
-        const pushed = await syncClient.resumeSyncAndPush();
-        if (pushed) {
+        const pushRes = await syncClient.resumeSyncAndPush();
+        if (pushRes.success) {
           setImportStatus(`Restored snapshot: ${label} and synced to cloud!`);
         } else {
-          setImportStatus(`Restored snapshot: ${label} locally. Syncing in background...`);
+          playSound('error');
+          setImportStatus(`Restored snapshot: ${label} locally, but cloud sync failed: ${pushRes.error || 'Server rejected push'}.`);
         }
       } else {
         syncClient.resumeSync();
@@ -397,9 +399,14 @@ export const SettingsSyncModal: React.FC<SettingsSyncModalProps> = ({
       syncClient.pauseSyncForImport();
       db.resetToSample();
       setSnapshots(db.getSnapshots());
-      setImportStatus('Database successfully reset to initial seed data. Syncing...');
-      await syncClient.resumeSyncAndPush();
-      setImportStatus('Database successfully reset and synced to cloud.');
+      setImportStatus('Database successfully reset to initial seed data. Syncing full snapshot to cloud...');
+      const pushRes = await syncClient.resumeSyncAndPush();
+      if (pushRes.success) {
+        setImportStatus('Database successfully reset and synced to cloud.');
+      } else {
+        playSound('error');
+        setImportStatus(`Database reset locally, but cloud sync failed: ${pushRes.error || 'Server rejected push'}.`);
+      }
     }
   };
 
