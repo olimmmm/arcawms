@@ -40,8 +40,9 @@ interface UseWindowVirtualListOptions<T> {
 }
 
 /**
- * High-performance window-scroll virtualizer hook for lists and grids.
- * Accurately calculates scroll margins and avoids remeasuring when tabs are inactive.
+ * High-performance window-scroll virtualizer hook.
+ * Safely guards against subpixel layout oscillation, disables flushSync to prevent commit loops,
+ * and completely disables virtual calculation (count: 0) when isActive is false.
  */
 export function useWindowVirtualList<T>({
   items,
@@ -55,9 +56,9 @@ export function useWindowVirtualList<T>({
   const measureOffset = useCallback(() => {
     if (listRef.current && isActive) {
       const rect = listRef.current.getBoundingClientRect();
-      const top = rect.top + window.scrollY;
+      const top = Math.round(rect.top + window.scrollY);
       if (top >= 0) {
-        setScrollMargin(top);
+        setScrollMargin(prev => (Math.abs(prev - top) > 2 ? top : prev));
       }
     }
   }, [isActive]);
@@ -80,17 +81,18 @@ export function useWindowVirtualList<T>({
   }, [estimateSize]);
 
   const virtualizer = useWindowVirtualizer({
-    count: items.length,
+    count: isActive ? items.length : 0,
     estimateSize: sizeFn,
     overscan,
     scrollMargin,
+    useFlushSync: false,
   });
 
   return {
     listRef,
     virtualizer,
-    virtualItems: virtualizer.getVirtualItems(),
-    totalSize: virtualizer.getTotalSize(),
+    virtualItems: isActive ? virtualizer.getVirtualItems() : [],
+    totalSize: isActive ? virtualizer.getTotalSize() : 0,
     scrollMargin: virtualizer.options.scrollMargin || scrollMargin,
   };
 }

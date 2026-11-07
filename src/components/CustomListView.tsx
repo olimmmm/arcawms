@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useDebouncedSearch } from '../hooks/useDebounce';
-import { useWindowVirtualList, useResponsiveColumns, chunkArray } from '../hooks/useWindowVirtual';
 import { 
   Bookmark, 
   Plus, 
@@ -136,22 +135,28 @@ export const CustomListView: React.FC<CustomListViewProps> = React.memo(({ isAct
     return customLists.find(l => l.id === activeListId) || customLists[0] || null;
   }, [customLists, activeListId]);
 
-  // Physical ownership calculation (strict read-only, 0 impact on cabinet counts)
-  const getPhysicalOwnership = (cardName: string) => {
-    const clean = cardName.trim().toLowerCase();
-    let inDrawers = 0;
-    let inDecks = 0;
-    let inProxyBox = 0;
+  // O(1) Pre-indexed physical ownership Map (eliminates 1.5M iterations on mobile)
+  const physicalOwnershipMap = useMemo(() => {
+    const map = new Map<string, { total: number; inDrawers: number; inDecks: number; inProxyBox: number }>();
     for (const inst of instances) {
-      if (inst.card_name.trim().toLowerCase() === clean) {
-        if (inst.state === 'A') inDrawers++;
-        else if (inst.state === 'B') inDecks++;
-        else if (inst.state === 'P') inProxyBox++;
+      const key = inst.card_name.trim().toLowerCase();
+      let entry = map.get(key);
+      if (!entry) {
+        entry = { total: 0, inDrawers: 0, inDecks: 0, inProxyBox: 0 };
+        map.set(key, entry);
       }
+      entry.total++;
+      if (inst.state === 'A') entry.inDrawers++;
+      else if (inst.state === 'B') entry.inDecks++;
+      else if (inst.state === 'P') entry.inProxyBox++;
     }
-    const total = inDrawers + inDecks + inProxyBox;
-    return { total, inDrawers, inDecks, inProxyBox };
-  };
+    return map;
+  }, [instances]);
+
+  const getPhysicalOwnership = useCallback((cardName: string) => {
+    const clean = cardName.trim().toLowerCase();
+    return physicalOwnershipMap.get(clean) || { total: 0, inDrawers: 0, inDecks: 0, inProxyBox: 0 };
+  }, [physicalOwnershipMap]);
 
   // Handle Autocomplete
   useEffect(() => {
@@ -436,21 +441,7 @@ export const CustomListView: React.FC<CustomListViewProps> = React.memo(({ isAct
     return items;
   }, [activeList, deferredFilterQuery, sortOption]);
 
-  // Responsive Grid Virtualization for Custom List Visual Grid View
-  const gridCols = useResponsiveColumns(4);
-  const itemRows = useMemo(() => chunkArray(processedItems, gridCols), [processedItems, gridCols]);
-  const {
-    listRef: gridListRef,
-    virtualItems: virtualGridRows,
-    totalSize: gridTotalSize,
-    scrollMargin: gridScrollMargin,
-    virtualizer: gridVirtualizer,
-  } = useWindowVirtualList({
-    items: itemRows,
-    estimateSize: 340,
-    overscan: 2,
-    isActive: isActive && viewMode === 'grid',
-  });
+
 
   // Aggregate stats for active list
   const activeListStats = useMemo(() => {
@@ -875,34 +866,9 @@ export const CustomListView: React.FC<CustomListViewProps> = React.memo(({ isAct
           </p>
         </div>
       ) : viewMode === 'grid' ? (
-        /* Visual Card Grid View with Window Virtualization */
-        <div
-          ref={gridListRef}
-          style={{
-            height: `${gridTotalSize}px`,
-            width: '100%',
-            position: 'relative',
-          }}
-        >
-          {virtualGridRows.map((virtualRow) => {
-            const rowItems = itemRows[virtualRow.index];
-            if (!rowItems) return null;
-
-            return (
-              <div
-                key={virtualRow.key}
-                data-index={virtualRow.index}
-                ref={gridVirtualizer.measureElement}
-                className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 sm:gap-4 pb-4"
-                style={{
-                  position: 'absolute',
-                  top: 0,
-                  left: 0,
-                  width: '100%',
-                  transform: `translateY(${virtualRow.start - gridScrollMargin}px)`,
-                }}
-              >
-                {rowItems.map((item) => {
+        /* Visual Card Grid View (Native CSS Grid) */
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 sm:gap-4">
+          {processedItems.map((item) => {
             const meta = item.card_metadata;
             const physical = getPhysicalOwnership(item.card_name);
             const isEditingNote = editingNoteItemId === item.id;
@@ -1101,9 +1067,6 @@ export const CustomListView: React.FC<CustomListViewProps> = React.memo(({ isAct
                     </div>
                   </div>
                 </div>
-              </div>
-            );
-                })}
               </div>
             );
           })}

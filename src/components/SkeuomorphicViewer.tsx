@@ -1,6 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useDebouncedSearch } from '../hooks/useDebounce';
-import { useWindowVirtualList, useResponsiveColumns, chunkArray } from '../hooks/useWindowVirtual';
 import { 
   Boxes, 
   MapPin, 
@@ -113,14 +112,29 @@ export const SkeuomorphicViewer: React.FC<SkeuomorphicViewerProps> = React.memo(
   const cardDictionary = useMemo(() => {
     const map = new Map<string, ScryfallCard>();
     for (const c of cards) {
-      const existing = map.get(c.name.toLowerCase());
+      if (c.oracle_id) map.set(c.oracle_id, c);
+      const lower = c.name.toLowerCase();
+      const existing = map.get(lower);
       if (!existing || existing.price_eur === 0 || (c.price_eur > 0 && c.price_eur < existing.price_eur)) {
-        map.set(c.name.toLowerCase(), c);
+        map.set(lower, c);
       }
-      map.set(c.oracle_id, c);
     }
     return map;
   }, [cards]);
+
+  // Precomputed instance price Map: instant O(1) drawer & batch valuation without recalculating during render
+  const instancePriceMap = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const inst of instances) {
+      if (inst.is_proxy) {
+        map.set(inst.instance_id, 0);
+        continue;
+      }
+      const meta = (inst.oracle_id && cardDictionary.get(inst.oracle_id)) || cardDictionary.get(inst.card_name.toLowerCase());
+      map.set(inst.instance_id, meta?.price_eur || 0);
+    }
+    return map;
+  }, [instances, cardDictionary]);
 
   // Dynamic Units list
   const unitsList = useMemo(() => {
@@ -201,36 +215,7 @@ export const SkeuomorphicViewer: React.FC<SkeuomorphicViewerProps> = React.memo(
     return proxyBoxCards.filter(inst => inst.card_name.toLowerCase().includes(q));
   }, [proxyBoxCards, deferredProxyQuery]);
 
-  // Responsive Grid Virtualization for Brewing and Proxy Box Galleries
-  const galleryCols = useResponsiveColumns(4);
-  const brewingRows = useMemo(() => chunkArray(filteredBrewingCards, galleryCols), [filteredBrewingCards, galleryCols]);
-  const proxyRows = useMemo(() => chunkArray(filteredProxyBoxCards, galleryCols), [filteredProxyBoxCards, galleryCols]);
 
-  const {
-    listRef: brewingListRef,
-    virtualItems: virtualBrewingRows,
-    totalSize: brewingTotalSize,
-    scrollMargin: brewingScrollMargin,
-    virtualizer: brewingVirtualizer
-  } = useWindowVirtualList({
-    items: brewingRows,
-    estimateSize: 340,
-    overscan: 2,
-    isActive: isActive && isViewingBrewing,
-  });
-
-  const {
-    listRef: proxyListRef,
-    virtualItems: virtualProxyRows,
-    totalSize: proxyTotalSize,
-    scrollMargin: proxyScrollMargin,
-    virtualizer: proxyVirtualizer
-  } = useWindowVirtualList({
-    items: proxyRows,
-    estimateSize: 340,
-    overscan: 2,
-    isActive: isActive && isViewingProxyBox,
-  });
 
   // Close open card dropdown menu when clicking anywhere outside
   useEffect(() => {
@@ -335,7 +320,7 @@ export const SkeuomorphicViewer: React.FC<SkeuomorphicViewerProps> = React.memo(
     setSelectedBatch(null);
     setIsViewingBrewing(false);
     setIsViewingProxyBox(false);
-    window.scrollTo({ top: 0, behavior: 'instant' });
+    if (window.scrollY > 80) window.scrollTo({ top: 0, behavior: 'instant' });
   };
 
   const handleOpenBrewing = () => {
@@ -585,33 +570,33 @@ export const SkeuomorphicViewer: React.FC<SkeuomorphicViewerProps> = React.memo(
     return warehouseMap[selectedUnit]?.[selectedDrawer]?.get(selectedBatch) || [];
   }, [selectedUnit, selectedDrawer, selectedBatch, warehouseMap]);
 
-  // Monetary value for cards in the currently opened drawer
+  // Monetary value for cards in the currently opened drawer (O(1) price lookups)
   const drawerTotalEur = useMemo(() => {
-    return activeBatchesInDrawer.reduce((drawerSum, [_, bCards]) => {
-      return drawerSum + bCards.reduce((batchSum, inst) => {
-        if (inst.is_proxy) return batchSum;
-        const meta = cardDictionary.get(inst.card_name.toLowerCase()) || cardDictionary.get(inst.oracle_id) || db.getCard(inst.card_name);
-        return batchSum + (meta?.price_eur || 0);
-      }, 0);
-    }, 0);
-  }, [activeBatchesInDrawer, cardDictionary]);
+    let sum = 0;
+    for (const [_, bCards] of activeBatchesInDrawer) {
+      for (const inst of bCards) {
+        sum += instancePriceMap.get(inst.instance_id) || 0;
+      }
+    }
+    return sum;
+  }, [activeBatchesInDrawer, instancePriceMap]);
 
-  // Monetary value for cards in the currently opened batch
+  // Monetary value for cards in the currently opened batch (O(1) price lookups)
   const batchTotalEur = useMemo(() => {
-    return activeCardsInBatch.reduce((sum, inst) => {
-      if (inst.is_proxy) return sum;
-      const meta = cardDictionary.get(inst.card_name.toLowerCase()) || cardDictionary.get(inst.oracle_id) || db.getCard(inst.card_name);
-      return sum + (meta?.price_eur || 0);
-    }, 0);
-  }, [activeCardsInBatch, cardDictionary]);
+    let sum = 0;
+    for (const inst of activeCardsInBatch) {
+      sum += instancePriceMap.get(inst.instance_id) || 0;
+    }
+    return sum;
+  }, [activeCardsInBatch, instancePriceMap]);
 
-  const getBatchTotalEur = (cards: CardInstance[]) => {
-    return cards.reduce((sum, inst) => {
-      if (inst.is_proxy) return sum;
-      const meta = cardDictionary.get(inst.card_name.toLowerCase()) || cardDictionary.get(inst.oracle_id) || db.getCard(inst.card_name);
-      return sum + (meta?.price_eur || 0);
-    }, 0);
-  };
+  const getBatchTotalEur = useCallback((bCards: CardInstance[]) => {
+    let sum = 0;
+    for (const inst of bCards) {
+      sum += instancePriceMap.get(inst.instance_id) || 0;
+    }
+    return sum;
+  }, [instancePriceMap]);
 
   const currentBatchCoordinate = selectedUnit && selectedDrawer && selectedBatch !== null 
     ? formatLocationId(selectedUnit, selectedDrawer, selectedBatch) 
@@ -1174,33 +1159,8 @@ export const SkeuomorphicViewer: React.FC<SkeuomorphicViewerProps> = React.memo(
                   : `No cards matching "${brewingSearchQuery}" in brewing.`}
               </div>
             ) : (
-              <div
-                ref={brewingListRef}
-                style={{
-                  height: `${brewingTotalSize}px`,
-                  width: '100%',
-                  position: 'relative',
-                }}
-              >
-                {virtualBrewingRows.map((virtualRow) => {
-                  const rowCards = brewingRows[virtualRow.index];
-                  if (!rowCards) return null;
-
-                  return (
-                    <div
-                      key={virtualRow.key}
-                      data-index={virtualRow.index}
-                      ref={brewingVirtualizer.measureElement}
-                      className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4 pb-4"
-                      style={{
-                        position: 'absolute',
-                        top: 0,
-                        left: 0,
-                        width: '100%',
-                        transform: `translateY(${virtualRow.start - brewingScrollMargin}px)`,
-                      }}
-                    >
-                      {rowCards.map((inst) => {
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+                {filteredBrewingCards.map((inst) => {
                   const meta = cardDictionary.get(inst.card_name.toLowerCase()) || cardDictionary.get(inst.oracle_id) || db.getCard(inst.card_name);
 
                   return (
@@ -1376,9 +1336,6 @@ export const SkeuomorphicViewer: React.FC<SkeuomorphicViewerProps> = React.memo(
                       </div>
                     </div>
                   );
-                      })}
-                    </div>
-                  );
                 })}
               </div>
             )}
@@ -1432,33 +1389,8 @@ export const SkeuomorphicViewer: React.FC<SkeuomorphicViewerProps> = React.memo(
                   : `No cards matching "${proxySearchQuery}" in Proxy Box.`}
               </div>
             ) : (
-              <div
-                ref={proxyListRef}
-                style={{
-                  height: `${proxyTotalSize}px`,
-                  width: '100%',
-                  position: 'relative',
-                }}
-              >
-                {virtualProxyRows.map((virtualRow) => {
-                  const rowCards = proxyRows[virtualRow.index];
-                  if (!rowCards) return null;
-
-                  return (
-                    <div
-                      key={virtualRow.key}
-                      data-index={virtualRow.index}
-                      ref={proxyVirtualizer.measureElement}
-                      className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4 pb-4"
-                      style={{
-                        position: 'absolute',
-                        top: 0,
-                        left: 0,
-                        width: '100%',
-                        transform: `translateY(${virtualRow.start - proxyScrollMargin}px)`,
-                      }}
-                    >
-                      {rowCards.map((inst) => {
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+                {filteredProxyBoxCards.map((inst) => {
                   const meta = cardDictionary.get(inst.card_name.toLowerCase()) || cardDictionary.get(inst.oracle_id) || db.getCard(inst.card_name);
 
                   return (
@@ -1613,9 +1545,6 @@ export const SkeuomorphicViewer: React.FC<SkeuomorphicViewerProps> = React.memo(
                           </button>
                         </div>
                       </div>
-                    </div>
-                  );
-                      })}
                     </div>
                   );
                 })}
