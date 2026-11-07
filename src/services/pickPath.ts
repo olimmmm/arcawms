@@ -256,7 +256,7 @@ export function formatAsMtgText(items: { card_name: string; count?: number }[]):
 
 /**
  * Generate linear pick route with 4-tier waterfall:
- * 1. Units (State A - Chaos Drawers)
+ * 1. Units (State A - Chaos Drawers) -> Optimized to minimize distinct Drawers & Batches opened
  * 2. Decks / Brewing (State B - Real Cards)
  * 3. Proxies (Proxy Box State P or State B Proxies)
  * 4. Missing (Unowned)
@@ -268,7 +268,9 @@ export function generatePickRoute(
 ): PickItem[] {
   const route: PickItem[] = [];
 
+  // 1. Build lookup index by name / normalized / front face, and total collection owned count
   const instancesByName = new Map<string, CardInstance[]>();
+  const totalOwnedByName = new Map<string, number>();
 
   const registerInstance = (key: string, inst: CardInstance) => {
     if (!key) return;
@@ -288,33 +290,201 @@ export function generatePickRoute(
     const frontKey = getFrontFaceName(inst.card_name).toLowerCase();
 
     registerInstance(rawKey, inst);
-    registerInstance(normKey, inst);
-    registerInstance(frontKey, inst);
+    if (normKey !== rawKey) registerInstance(normKey, inst);
+    if (frontKey !== rawKey && frontKey !== normKey) registerInstance(frontKey, inst);
+
+    totalOwnedByName.set(rawKey, (totalOwnedByName.get(rawKey) || 0) + 1);
+    if (normKey !== rawKey) totalOwnedByName.set(normKey, (totalOwnedByName.get(normKey) || 0) + 1);
+    if (frontKey !== rawKey && frontKey !== normKey) totalOwnedByName.set(frontKey, (totalOwnedByName.get(frontKey) || 0) + 1);
   }
 
-  const allocated = new Set<string>();
-
-  for (const wanted of wantedList) {
-    const rawKey = wanted.name.trim().toLowerCase();
-    const normKey = normalizeCardName(wanted.name);
-    const frontKey = getFrontFaceName(wanted.name).toLowerCase();
-
-    const available = instancesByName.get(rawKey)
+  const getAvailable = (name: string): CardInstance[] => {
+    const rawKey = name.trim().toLowerCase();
+    const normKey = normalizeCardName(name);
+    const frontKey = getFrontFaceName(name).toLowerCase();
+    return instancesByName.get(rawKey)
       || instancesByName.get(normKey)
       || instancesByName.get(frontKey)
       || [];
+  };
 
-    let needed = wanted.count;
+  const getOwnedCount = (name: string): number => {
+    const rawKey = name.trim().toLowerCase();
+    const normKey = normalizeCardName(name);
+    const frontKey = getFrontFaceName(name).toLowerCase();
+    return totalOwnedByName.get(rawKey)
+      || totalOwnedByName.get(normKey)
+      || totalOwnedByName.get(frontKey)
+      || 0;
+  };
 
-    // 1. Waterfall Tier 1: Cards located in Units (Chaos Drawers, State A)
-    const inChaosInstances = available
-      .filter(i => i.state === 'A' && !allocated.has(i.instance_id))
-      .sort((a, b) => compareLocations(a.location_id, b.location_id));
+  const globallyAllocated = new Set<string>();
 
-    for (const inst of inChaosInstances) {
-      if (needed <= 0) break;
-      allocated.add(inst.instance_id);
+  // 2. Prepare requests for Tier 1: Chaos Drawers (State A)
+  interface ChaosRequest {
+    name: string;
+    totalWanted: number;
+    neededChaos: number;
+    availableChaos: CardInstance[];
+    allocatedChaos: CardInstance[];
+  }
 
+  const chaosRequests: ChaosRequest[] = wantedList.map(w => {
+    const avail = getAvailable(w.name);
+    const chaos = avail.filter(i => i.state === 'A');
+    const needed = Math.min(w.count, chaos.length);
+    return {
+      name: w.name,
+      totalWanted: w.count,
+      neededChaos: needed,
+      availableChaos: chaos,
+      allocatedChaos: []
+    };
+  });
+
+  // Calculate Batch Affinity & Drawer Affinity across all wanted cards
+  const batchAffinity = new Map<string, number>();
+  const drawerAffinity = new Map<string, number>();
+
+  for (const req of chaosRequests) {
+    if (req.neededChaos <= 0) continue;
+    const seenB = new Set<string>();
+    const seenD = new Set<string>();
+    for (const inst of req.availableChaos) {
+      const coord = parseLocationId(inst.location_id);
+      if (coord.valid) {
+        seenB.add(coord.formatted);
+        seenD.add(`${coord.unit}.${coord.drawer}`);
+      }
+    }
+    for (const b of seenB) batchAffinity.set(b, (batchAffinity.get(b) || 0) + 1);
+    for (const d of seenD) drawerAffinity.set(d, (drawerAffinity.get(d) || 0) + 1);
+  }
+
+  const visitedBatches = new Set<string>();
+  const visitedDrawers = new Set<string>();
+
+  const markInstanceChosen = (inst: CardInstance) => {
+    globallyAllocated.add(inst.instance_id);
+    const coord = parseLocationId(inst.location_id);
+    if (coord.valid) {
+      visitedBatches.add(coord.formatted);
+      visitedDrawers.add(`${coord.unit}.${coord.drawer}`);
+    }
+  };
+
+  // Step 2A: Allocate mandatory instances first (cards with no alternative locations)
+  for (const req of chaosRequests) {
+    if (req.neededChaos > 0 && req.neededChaos >= req.availableChaos.length) {
+      for (const inst of req.availableChaos) {
+        if (!globallyAllocated.has(inst.instance_id)) {
+          req.allocatedChaos.push(inst);
+          markInstanceChosen(inst);
+          if (req.allocatedChaos.length === req.neededChaos) break;
+        }
+      }
+    }
+  }
+
+  // Step 2B: Allocate remaining cards in order of least flexibility (constrained cards first)
+  const unfulfilledRequests = chaosRequests
+    .filter(req => req.allocatedChaos.length < req.neededChaos)
+    .sort((a, b) => {
+      const flexA = a.availableChaos.length - a.neededChaos;
+      const flexB = b.availableChaos.length - b.neededChaos;
+      return flexA - flexB;
+    });
+
+  for (const req of unfulfilledRequests) {
+    while (req.allocatedChaos.length < req.neededChaos) {
+      const candidates = req.availableChaos.filter(i => !globallyAllocated.has(i.instance_id));
+      if (candidates.length === 0) break;
+
+      // Score each candidate instance:
+      // High bonus if batch already visited (+20,000)
+      // Large bonus if drawer already visited (+5,000)
+      // Co-occurrence bonus for other unassigned cards
+      let bestInst = candidates[0];
+      let bestScore = -Infinity;
+
+      for (const inst of candidates) {
+        const coord = parseLocationId(inst.location_id);
+        if (!coord.valid) continue;
+        const bKey = coord.formatted;
+        const dKey = `${coord.unit}.${coord.drawer}`;
+
+        let score = 0;
+        if (visitedBatches.has(bKey)) {
+          score += 20000;
+        } else if (visitedDrawers.has(dKey)) {
+          score += 5000;
+        }
+
+        score += (batchAffinity.get(bKey) || 0) * 100;
+        score += (drawerAffinity.get(dKey) || 0) * 10;
+
+        const coordRank = coord.unit * 1000 + (coord.drawer.charCodeAt(0) - 65) * 100 + coord.batch_index;
+        score -= coordRank / 100000;
+
+        if (score > bestScore) {
+          bestScore = score;
+          bestInst = inst;
+        }
+      }
+
+      req.allocatedChaos.push(bestInst);
+      markInstanceChosen(bestInst);
+    }
+  }
+
+  // Step 2C: 1-Opt local search refinement (swap isolated batch visits for already-visited batches)
+  for (const req of chaosRequests) {
+    if (req.allocatedChaos.length === 0) continue;
+    const alternatives = req.availableChaos.filter(i => !globallyAllocated.has(i.instance_id));
+    if (alternatives.length === 0) continue;
+
+    for (let i = 0; i < req.allocatedChaos.length; i++) {
+      const currentInst = req.allocatedChaos[i];
+      const currentCoord = parseLocationId(currentInst.location_id);
+      if (!currentCoord.valid) continue;
+
+      const currentB = currentCoord.formatted;
+      let othersInCurrentB = 0;
+      for (const r of chaosRequests) {
+        for (const inst of r.allocatedChaos) {
+          if (inst.instance_id !== currentInst.instance_id) {
+            const c = parseLocationId(inst.location_id);
+            if (c.valid && c.formatted === currentB) othersInCurrentB++;
+          }
+        }
+      }
+
+      if (othersInCurrentB === 0) {
+        const betterAlt = alternatives.find(alt => {
+          const c = parseLocationId(alt.location_id);
+          return c.valid && visitedBatches.has(c.formatted) && c.formatted !== currentB;
+        });
+
+        if (betterAlt) {
+          globallyAllocated.delete(currentInst.instance_id);
+          visitedBatches.delete(currentB);
+          req.allocatedChaos[i] = betterAlt;
+          markInstanceChosen(betterAlt);
+          break;
+        }
+      }
+    }
+  }
+
+  // Step 3: Populate Route across all 4 Waterfall Tiers
+  for (const req of chaosRequests) {
+    const rawKey = req.name.trim().toLowerCase();
+    const normKey = normalizeCardName(req.name);
+    const frontKey = getFrontFaceName(req.name).toLowerCase();
+    const totalOwned = getOwnedCount(req.name);
+
+    // Tier 1 items (Units / Chaos Drawers)
+    for (const inst of req.allocatedChaos) {
       const coord = parseLocationId(inst.location_id);
       const metadata = cardDictionary.get(inst.card_name.toLowerCase()) 
         || cardDictionary.get(inst.oracle_id)
@@ -338,19 +508,22 @@ export function generatePickRoute(
         is_proxy: false,
         category: 'units',
         card_metadata: metadata,
-        original_instance: inst
+        original_instance: inst,
+        total_owned: totalOwned
       });
-      needed--;
     }
 
-    // 2. Waterfall Tier 2: Real cards located in Decks / Brewing (State B, non-proxy)
-    if (needed > 0) {
-      const inDecksInstances = available.filter(
-        i => i.state === 'B' && !i.is_proxy && !allocated.has(i.instance_id)
+    let neededRemaining = req.totalWanted - req.allocatedChaos.length;
+    const available = getAvailable(req.name);
+
+    // Tier 2: Real cards in Decks / Brewing (State B)
+    if (neededRemaining > 0) {
+      const inDecks = available.filter(
+        i => i.state === 'B' && !i.is_proxy && !globallyAllocated.has(i.instance_id)
       );
-      for (const inst of inDecksInstances) {
-        if (needed <= 0) break;
-        allocated.add(inst.instance_id);
+      for (const inst of inDecks) {
+        if (neededRemaining <= 0) break;
+        globallyAllocated.add(inst.instance_id);
 
         const metadata = cardDictionary.get(inst.card_name.toLowerCase()) 
           || cardDictionary.get(inst.oracle_id)
@@ -371,20 +544,21 @@ export function generatePickRoute(
           is_proxy: false,
           category: 'decks',
           card_metadata: metadata,
-          original_instance: inst
+          original_instance: inst,
+          total_owned: totalOwned
         });
-        needed--;
+        neededRemaining--;
       }
     }
 
-    // 3. Waterfall Tier 3: Proxies located in Proxy Box (State P) or in Decks (State B with is_proxy)
-    if (needed > 0) {
-      const proxyInstances = available.filter(
-        i => (i.state === 'P' || Boolean(i.is_proxy)) && !allocated.has(i.instance_id)
+    // Tier 3: Proxies (Proxy Box State P or State B Proxies)
+    if (neededRemaining > 0) {
+      const proxies = available.filter(
+        i => (i.state === 'P' || Boolean(i.is_proxy)) && !globallyAllocated.has(i.instance_id)
       );
-      for (const inst of proxyInstances) {
-        if (needed <= 0) break;
-        allocated.add(inst.instance_id);
+      for (const inst of proxies) {
+        if (neededRemaining <= 0) break;
+        globallyAllocated.add(inst.instance_id);
 
         const metadata = cardDictionary.get(inst.card_name.toLowerCase()) 
           || cardDictionary.get(inst.oracle_id)
@@ -405,32 +579,34 @@ export function generatePickRoute(
           is_proxy: true,
           category: 'proxies',
           card_metadata: metadata,
-          original_instance: inst
+          original_instance: inst,
+          total_owned: totalOwned
         });
-        needed--;
+        neededRemaining--;
       }
     }
 
-    // 4. Waterfall Tier 4: Cards NOT in collection at all (Unowned / Missing)
-    while (needed > 0) {
+    // Tier 4: Missing (Unowned)
+    while (neededRemaining > 0) {
       const metadata = cardDictionary.get(rawKey)
         || cardDictionary.get(normKey)
         || cardDictionary.get(frontKey);
       route.push({
-        id: `unowned-${wanted.name}-${needed}`,
-        card_name: wanted.name,
+        id: `unowned-${req.name}-${neededRemaining}`,
+        card_name: req.name,
         location_id: null,
         status: 'missing',
         inChaos: false,
         is_proxy: false,
         category: 'missing',
-        card_metadata: metadata
+        card_metadata: metadata,
+        total_owned: totalOwned
       });
-      needed--;
+      neededRemaining--;
     }
   }
 
-  // Sort: In-Chaos items first by 3-tier coordinate (Unit -> Drawer -> Batch), then Decks, then Proxies, then Missing
+  // 4. Hierarchical sort: Units items first (Unit -> Drawer -> Batch), then Decks, Proxies, Missing
   const categoryOrder: Record<string, number> = {
     units: 0,
     decks: 1,

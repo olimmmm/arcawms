@@ -51,6 +51,7 @@ export interface PickItem {
   category?: 'units' | 'decks' | 'proxies' | 'missing';
   card_metadata?: ScryfallCard;
   original_instance?: CardInstance;
+  total_owned?: number;
 }
 
 export interface IngestItem {

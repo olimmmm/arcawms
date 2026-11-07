@@ -258,6 +258,7 @@ export const SniperSearch: React.FC<SniperSearchProps> = React.memo(({ isActive 
   const [cards, setCards] = useState<ScryfallCard[]>(() => db.getAllCards());
   const [unitCount, setUnitCount] = useState<number>(() => db.getUnitCount());
   const [customLists, setCustomLists] = useState<CustomList[]>(() => db.getCustomLists());
+  const [recentListId, setRecentListId] = useState<string | null>(() => db.getMostRecentListId());
 
   useEffect(() => {
     return db.subscribe(() => {
@@ -265,8 +266,18 @@ export const SniperSearch: React.FC<SniperSearchProps> = React.memo(({ isActive 
       setCards(db.getAllCards());
       setUnitCount(db.getUnitCount());
       setCustomLists(db.getCustomLists());
+      setRecentListId(db.getMostRecentListId());
     });
   }, []);
+
+  const mostRecentList = useMemo(() => {
+    if (customLists.length === 0) return null;
+    if (recentListId) {
+      const found = customLists.find(l => l.id === recentListId);
+      if (found) return found;
+    }
+    return customLists[0] || null;
+  }, [customLists, recentListId]);
 
   // Autocomplete
   useEffect(() => {
@@ -593,6 +604,8 @@ export const SniperSearch: React.FC<SniperSearchProps> = React.memo(({ isActive 
   const handleAddCardToList = useCallback((cardName: string, listId: string, listName: string, metadata?: ScryfallCard) => {
     playSound('success');
     triggerHaptic('light');
+    db.setMostRecentListId(listId);
+    setRecentListId(listId);
     const addedItem = db.addCardToCustomList(listId, cardName, 1, metadata);
     setCardMenuOpenId(null);
     setListSubmenuOpenId(null);
@@ -610,6 +623,8 @@ export const SniperSearch: React.FC<SniperSearchProps> = React.memo(({ isActive 
     if (!name || !name.trim()) return;
     playSound('click');
     const newList = db.createCustomList(name.trim());
+    db.setMostRecentListId(newList.id);
+    setRecentListId(newList.id);
     const addedItem = db.addCardToCustomList(newList.id, cardName, 1, metadata);
     setCardMenuOpenId(null);
     setListSubmenuOpenId(null);
@@ -839,6 +854,7 @@ export const SniperSearch: React.FC<SniperSearchProps> = React.memo(({ isActive 
                     cardMenuOpenId={cardMenuOpenId}
                     listSubmenuOpenId={listSubmenuOpenId}
                     customLists={customLists}
+                    mostRecentList={mostRecentList}
                     recentlyMoved={recentlyMoved}
                     onToggleCardMenu={handleToggleCardMenu}
                     onToggleSubmenu={handleToggleSubmenu}

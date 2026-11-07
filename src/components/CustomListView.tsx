@@ -43,9 +43,17 @@ export const CustomListView: React.FC<CustomListViewProps> = React.memo(({ isAct
   const [customLists, setCustomLists] = useState<CustomList[]>(() => db.getCustomLists());
   const [instances, setInstances] = useState<CardInstance[]>(() => db.getAllInstances());
   const [activeListId, setActiveListId] = useState<string>(() => {
+    const recent = db.getMostRecentListId();
     const lists = db.getCustomLists();
+    if (recent && lists.some(l => l.id === recent)) return recent;
     return lists[0]?.id || '';
   });
+
+  useEffect(() => {
+    if (activeListId) {
+      db.setMostRecentListId(activeListId);
+    }
+  }, [activeListId]);
 
   // UI state
   const [viewMode, setViewMode] = useState<'grid' | 'table'>('grid');

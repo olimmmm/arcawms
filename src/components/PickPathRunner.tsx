@@ -139,11 +139,13 @@ export const PickPathRunner: React.FC<PickPathRunnerProps> = React.memo(({ isAct
     playSound('click');
     triggerHaptic('light');
 
-    if (item.status === 'pulled_brew' && item.instance_id && item.location_id) {
-      // Put back in drawer
-      db.returnToChaos(item.instance_id, item.location_id);
+    if (item.status === 'pulled_brew' && item.instance_id) {
+      if (item.is_proxy) {
+        db.returnToProxyBox(item.instance_id);
+      } else if (item.location_id) {
+        db.returnToChaos(item.instance_id, item.location_id);
+      }
     } else if (item.status === 'pulled_trade' && item.original_instance) {
-      // Restore back into database
       db.restoreInstance(item.original_instance);
     }
 
@@ -388,6 +390,11 @@ export const PickPathRunner: React.FC<PickPathRunnerProps> = React.memo(({ isAct
                           {item.card_metadata?.price_eur ? (
                             <span className="text-[11px] font-mono text-emerald-400">€{item.card_metadata.price_eur.toFixed(2)}</span>
                           ) : null}
+                          {typeof item.total_owned === 'number' && (
+                            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700" title="Total copies owned in collection">
+                              {item.total_owned} Owned
+                            </span>
+                          )}
                         </div>
                         <div className="text-[11px] text-slate-400 font-mono">
                           Unit {item.unit} ➔ Drawer {item.drawer} ➔ Batch {item.batch_index}
@@ -481,7 +488,14 @@ export const PickPathRunner: React.FC<PickPathRunnerProps> = React.memo(({ isAct
               <div className="divide-y divide-slate-800 text-xs">
                 {alreadyInDecks.map(item => (
                   <div key={item.id} className="py-2 flex items-center justify-between text-slate-400">
-                    <span className="font-medium text-slate-200">{item.card_name}</span>
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-slate-200">{item.card_name}</span>
+                      {typeof item.total_owned === 'number' && (
+                        <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700" title="Total copies owned in collection">
+                          {item.total_owned} Owned
+                        </span>
+                      )}
+                    </div>
                     <span className="font-mono text-blue-300 text-[11px]">Out in Decks</span>
                   </div>
                 ))}
@@ -491,8 +505,8 @@ export const PickPathRunner: React.FC<PickPathRunnerProps> = React.memo(({ isAct
 
           {/* Cards in Proxies */}
           {proxyItems.length > 0 && (
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-lg space-y-2">
-              <div className="flex items-center justify-between">
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl divide-y divide-slate-800">
+              <div className="p-4 bg-slate-900/90 flex items-center justify-between border-b border-slate-800">
                 <h3 className="text-xs font-mono font-bold text-purple-400 uppercase flex items-center gap-1.5">
                   <Sparkles className="h-3.5 w-3.5" />
                   <span>PROXIES FOUND ({proxyItems.length})</span>
@@ -507,16 +521,118 @@ export const PickPathRunner: React.FC<PickPathRunnerProps> = React.memo(({ isAct
                   <span>Copy List</span>
                 </button>
               </div>
-              <div className="divide-y divide-slate-800 text-xs">
-                {proxyItems.map(item => (
-                  <div key={item.id} className="py-2 flex items-center justify-between text-slate-400">
-                    <span className="font-medium text-purple-200">{item.card_name}</span>
-                    <span className="font-mono text-purple-400 text-[11px]">
-                      {item.location_id || 'Proxy Box'} • £0.00
-                    </span>
+              {proxyItems.map(item => {
+                const isPulledBrew = item.status === 'pulled_brew';
+                const isPulledTrade = item.status === 'pulled_trade';
+                const isSkipped = item.status === 'skipped';
+
+                return (
+                  <div
+                    key={item.id}
+                    className={`p-3.5 sm:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 transition ${
+                      isPulledBrew 
+                        ? 'bg-purple-950/20 border-l-4 border-l-purple-500' 
+                        : isPulledTrade
+                        ? 'bg-rose-950/20 border-l-4 border-l-rose-500'
+                        : isSkipped 
+                        ? 'bg-slate-850/60' 
+                        : 'hover:bg-slate-850'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      {/* Visual Proxy Badge */}
+                      <div className="px-2.5 py-1.5 rounded-lg bg-purple-500/15 text-purple-300 font-mono text-xs font-bold border border-purple-500/30 flex items-center gap-1 shrink-0">
+                        <Sparkles className="h-3.5 w-3.5 text-purple-400" />
+                        <span>PROXY</span>
+                      </div>
+
+                      {/* Card Thumbnail */}
+                      <div className="w-10 h-14 rounded overflow-hidden shrink-0 border border-purple-500/30 bg-slate-950">
+                        <img
+                          src={item.card_metadata?.image_url_normal || getScryfallImageFallback(item.card_name)}
+                          alt={item.card_name}
+                          className="w-full h-full object-cover"
+                          onError={(e) => {
+                            e.currentTarget.src = getScryfallImageFallback(item.card_name);
+                          }}
+                        />
+                      </div>
+
+                      <div>
+                        <div className="text-sm font-bold text-white flex items-center gap-2">
+                          <span className="text-purple-200">{item.card_name}</span>
+                          {typeof item.total_owned === 'number' && (
+                            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700" title="Total copies owned in collection">
+                              {item.total_owned} Owned
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[11px] text-purple-400/80 font-mono">
+                          {item.location_id || 'Proxy Box'} • £0.00
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Dual Pull & Undo Actions for Proxies */}
+                    <div className="flex items-center gap-2 self-end sm:self-auto">
+                      {isPulledBrew ? (
+                        <button
+                          onClick={() => handleUndo(item)}
+                          className="px-3.5 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-mono font-bold text-xs flex items-center gap-1.5 shadow cursor-pointer"
+                          title="Click to undo and return to Proxy Box"
+                        >
+                          <CheckCircle2 className="h-3.5 w-3.5" />
+                          <span>IN BREW (UNDO ↺)</span>
+                        </button>
+                      ) : isPulledTrade ? (
+                        <button
+                          onClick={() => handleUndo(item)}
+                          className="px-3.5 py-1.5 rounded-xl bg-rose-700 hover:bg-rose-800 text-white font-mono font-bold text-xs flex items-center gap-1.5 shadow cursor-pointer"
+                          title="Click to undo and restore proxy"
+                        >
+                          <Undo2 className="h-3.5 w-3.5" />
+                          <span>REMOVED (UNDO ↺)</span>
+                        </button>
+                      ) : isSkipped ? (
+                        <button
+                          onClick={() => handleUndo(item)}
+                          className="px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-mono text-xs flex items-center gap-1 cursor-pointer"
+                        >
+                          <span>SKIPPED (UNDO ↺)</span>
+                        </button>
+                      ) : (
+                        <>
+                          <button
+                            onClick={() => handlePullToBrew(item)}
+                            className="px-3.5 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 active:bg-purple-700 text-white font-bold font-mono text-xs shadow flex items-center gap-1.5 cursor-pointer"
+                            title="Move proxy to Decks / Brewing"
+                          >
+                            <Layers className="h-3.5 w-3.5" />
+                            <span>TO BREW</span>
+                          </button>
+
+                          <button
+                            onClick={() => handleRemoveForTrade(item)}
+                            className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-rose-900/60 text-slate-300 hover:text-rose-200 border border-slate-700 font-mono text-xs flex items-center gap-1 cursor-pointer"
+                            title="Remove proxy from collection"
+                          >
+                            <ShoppingBag className="h-3.5 w-3.5 text-rose-400" />
+                            <span>REMOVE</span>
+                          </button>
+
+                          <button
+                            onClick={() => handleSkip(item)}
+                            className="px-2.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 text-xs font-mono cursor-pointer"
+                            title="Skip (leave in Proxy Box)"
+                          >
+                            <span>SKIP</span>
+                          </button>
+                        </>
+                      )}
+                    </div>
                   </div>
-                ))}
-              </div>
+                );
+              })}
             </div>
           )}
 
@@ -540,7 +656,14 @@ export const PickPathRunner: React.FC<PickPathRunnerProps> = React.memo(({ isAct
               <div className="divide-y divide-slate-800 text-xs">
                 {missingItems.map(item => (
                   <div key={item.id} className="py-2 flex items-center justify-between text-slate-400">
-                    <span className="font-medium text-slate-300">{item.card_name}</span>
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-slate-300">{item.card_name}</span>
+                      {typeof item.total_owned === 'number' && (
+                        <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700" title="Total copies owned in collection">
+                          {item.total_owned} Owned
+                        </span>
+                      )}
+                    </div>
                     <span className="font-mono text-rose-400 text-[11px]">Unowned</span>
                   </div>
                 ))}

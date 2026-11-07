@@ -88,6 +88,7 @@ export const SkeuomorphicViewer: React.FC<SkeuomorphicViewerProps> = React.memo(
   const [instances, setInstances] = useState<CardInstance[]>(() => db.getAllInstances());
   const [cards, setCards] = useState<ScryfallCard[]>(() => db.getAllCards());
   const [customLists, setCustomLists] = useState<CustomList[]>(() => db.getCustomLists());
+  const [recentListId, setRecentListId] = useState<string | null>(() => db.getMostRecentListId());
   const [listSubmenuOpenId, setListSubmenuOpenId] = useState<string | null>(null);
   const [listToast, setListToast] = useState<{ message: string; onUndo?: () => void } | null>(null);
   const listToastTimeoutRef = useRef<any>(null);
@@ -98,8 +99,18 @@ export const SkeuomorphicViewer: React.FC<SkeuomorphicViewerProps> = React.memo(
       setCards(db.getAllCards());
       setUnitCount(db.getUnitCount());
       setCustomLists(db.getCustomLists());
+      setRecentListId(db.getMostRecentListId());
     });
   }, []);
+
+  const mostRecentList = useMemo(() => {
+    if (customLists.length === 0) return null;
+    if (recentListId) {
+      const found = customLists.find(l => l.id === recentListId);
+      if (found) return found;
+    }
+    return customLists[0] || null;
+  }, [customLists, recentListId]);
 
   useEffect(() => {
     return () => {
@@ -418,6 +429,8 @@ export const SkeuomorphicViewer: React.FC<SkeuomorphicViewerProps> = React.memo(
   const handleAddCardToList = (cardName: string, listId: string, listName: string) => {
     playSound('success');
     triggerHaptic('light');
+    db.setMostRecentListId(listId);
+    setRecentListId(listId);
     const addedItem = db.addCardToCustomList(listId, cardName, 1);
     setCardMenuOpenId(null);
     setListSubmenuOpenId(null);
@@ -436,6 +449,8 @@ export const SkeuomorphicViewer: React.FC<SkeuomorphicViewerProps> = React.memo(
     if (!name || !name.trim()) return;
     playSound('click');
     const newList = db.createCustomList(name.trim());
+    db.setMostRecentListId(newList.id);
+    setRecentListId(newList.id);
     const addedItem = db.addCardToCustomList(newList.id, cardName, 1);
     setCardMenuOpenId(null);
     setListSubmenuOpenId(null);
@@ -1010,6 +1025,25 @@ export const SkeuomorphicViewer: React.FC<SkeuomorphicViewerProps> = React.memo(
                               </button>
 
                               <div className="border-t border-slate-800 my-1" />
+                              {mostRecentList && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setCardMenuOpenId(null);
+                                    handleAddCardToList(inst.card_name, mostRecentList.id, mostRecentList.name);
+                                  }}
+                                  className="w-full px-2 py-1.5 rounded-lg text-left flex items-center justify-between bg-theme-accent/10 hover:bg-theme-accent/20 text-theme-accent border border-theme-accent/30 transition cursor-pointer font-semibold group"
+                                  title={`Quick add "${inst.card_name}" to ${mostRecentList.name}`}
+                                >
+                                  <span className="flex items-center gap-1.5 truncate">
+                                    <Bookmark className="h-3.5 w-3.5 text-theme-accent fill-theme-accent/30 shrink-0" />
+                                    <span className="truncate">Add to <strong className="font-bold underline decoration-theme-accent/50">{mostRecentList.name}</strong></span>
+                                  </span>
+                                  <span className="text-[9px] font-mono text-slate-400 shrink-0 ml-1 group-hover:text-white">
+                                    {mostRecentList.items.reduce((acc, i) => acc + i.count, 0)}
+                                  </span>
+                                </button>
+                              )}
                               <button
                                 type="button"
                                 onClick={() => setListSubmenuOpenId(listSubmenuOpenId === inst.instance_id ? null : inst.instance_id)}
@@ -1233,6 +1267,25 @@ export const SkeuomorphicViewer: React.FC<SkeuomorphicViewerProps> = React.memo(
                               </button>
 
                               <div className="border-t border-slate-800 my-1" />
+                              {mostRecentList && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setCardMenuOpenId(null);
+                                    handleAddCardToList(inst.card_name, mostRecentList.id, mostRecentList.name);
+                                  }}
+                                  className="w-full px-2 py-1.5 rounded-lg text-left flex items-center justify-between bg-theme-accent/10 hover:bg-theme-accent/20 text-theme-accent border border-theme-accent/30 transition cursor-pointer font-semibold group"
+                                  title={`Quick add "${inst.card_name}" to ${mostRecentList.name}`}
+                                >
+                                  <span className="flex items-center gap-1.5 truncate">
+                                    <Bookmark className="h-3.5 w-3.5 text-theme-accent fill-theme-accent/30 shrink-0" />
+                                    <span className="truncate">Add to <strong className="font-bold underline decoration-theme-accent/50">{mostRecentList.name}</strong></span>
+                                  </span>
+                                  <span className="text-[9px] font-mono text-slate-400 shrink-0 ml-1 group-hover:text-white">
+                                    {mostRecentList.items.reduce((acc, i) => acc + i.count, 0)}
+                                  </span>
+                                </button>
+                              )}
                               <button
                                 type="button"
                                 onClick={() => setListSubmenuOpenId(listSubmenuOpenId === inst.instance_id ? null : inst.instance_id)}
@@ -1461,6 +1514,25 @@ export const SkeuomorphicViewer: React.FC<SkeuomorphicViewerProps> = React.memo(
                               </button>
 
                               <div className="border-t border-slate-800 my-1" />
+                              {mostRecentList && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setCardMenuOpenId(null);
+                                    handleAddCardToList(inst.card_name, mostRecentList.id, mostRecentList.name);
+                                  }}
+                                  className="w-full px-2 py-1.5 rounded-lg text-left flex items-center justify-between bg-theme-accent/10 hover:bg-theme-accent/20 text-theme-accent border border-theme-accent/30 transition cursor-pointer font-semibold group"
+                                  title={`Quick add "${inst.card_name}" to ${mostRecentList.name}`}
+                                >
+                                  <span className="flex items-center gap-1.5 truncate">
+                                    <Bookmark className="h-3.5 w-3.5 text-theme-accent fill-theme-accent/30 shrink-0" />
+                                    <span className="truncate">Add to <strong className="font-bold underline decoration-theme-accent/50">{mostRecentList.name}</strong></span>
+                                  </span>
+                                  <span className="text-[9px] font-mono text-slate-400 shrink-0 ml-1 group-hover:text-white">
+                                    {mostRecentList.items.reduce((acc, i) => acc + i.count, 0)}
+                                  </span>
+                                </button>
+                              )}
                               <button
                                 type="button"
                                 onClick={() => setListSubmenuOpenId(listSubmenuOpenId === inst.instance_id ? null : inst.instance_id)}

@@ -732,6 +732,23 @@ class ArcaDatabase {
     };
   }
 
+  public getMostRecentListId(): string | null {
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        return localStorage.getItem('arcawms_recent_list_id') || null;
+      }
+    } catch {}
+    return null;
+  }
+
+  public setMostRecentListId(listId: string): void {
+    try {
+      if (listId && typeof window !== 'undefined' && window.localStorage) {
+        localStorage.setItem('arcawms_recent_list_id', listId);
+      }
+    } catch {}
+  }
+
   public createCustomList(name: string, description?: string): CustomList {
     const cleanName = name.trim() || 'Untitled List';
     const newList: CustomList = {
@@ -743,6 +760,7 @@ class ArcaDatabase {
       items: []
     };
     this.customLists.set(newList.id, newList);
+    this.setMostRecentListId(newList.id);
     this.recordListMutation(newList);
     this.saveCustomLists();
     this.touchUpdated();
@@ -821,6 +839,7 @@ class ArcaDatabase {
     }
 
     list.updated_at = new Date().toISOString();
+    this.setMostRecentListId(listId);
     this.recordListMutation(list);
     this.saveCustomLists();
     this.touchUpdated();
@@ -880,6 +899,7 @@ class ArcaDatabase {
     }
 
     list.updated_at = new Date().toISOString();
+    this.setMostRecentListId(listId);
     this.recordListMutation(list);
     this.saveCustomLists();
     this.touchUpdated();
@@ -916,6 +936,7 @@ class ArcaDatabase {
 
     item.count = count;
     list.updated_at = new Date().toISOString();
+    this.setMostRecentListId(listId);
     this.recordListMutation(list);
     this.saveCustomLists();
     this.touchUpdated();
@@ -932,6 +953,7 @@ class ArcaDatabase {
 
     item.notes = notes;
     list.updated_at = new Date().toISOString();
+    this.setMostRecentListId(listId);
     this.recordListMutation(list);
     this.saveCustomLists();
     this.touchUpdated();

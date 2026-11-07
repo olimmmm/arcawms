@@ -23,6 +23,7 @@ interface SniperCardItemProps {
   cardMenuOpenId: string | null;
   listSubmenuOpenId: string | null;
   customLists: CustomList[];
+  mostRecentList?: CustomList | null;
   recentlyMoved: Map<string, { fromLoc: string }>;
   onToggleCardMenu: (id: string | null) => void;
   onToggleSubmenu: (id: string | null) => void;
@@ -48,6 +49,7 @@ export const SniperCardItem: React.FC<SniperCardItemProps> = React.memo(({
   cardMenuOpenId,
   listSubmenuOpenId,
   customLists,
+  mostRecentList,
   recentlyMoved,
   onToggleCardMenu,
   onToggleSubmenu,
@@ -221,6 +223,25 @@ export const SniperCardItem: React.FC<SniperCardItemProps> = React.memo(({
               )}
 
               <div className="border-t border-slate-800 my-1" />
+              {mostRecentList && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onToggleCardMenu(null);
+                    onAddCardToList(card.name, mostRecentList.id, mostRecentList.name, card);
+                  }}
+                  className="w-full px-2 py-1.5 rounded-lg text-left flex items-center justify-between bg-theme-accent/10 hover:bg-theme-accent/20 text-theme-accent border border-theme-accent/30 transition cursor-pointer font-semibold group"
+                  title={`Quick add "${card.name}" to ${mostRecentList.name}`}
+                >
+                  <span className="flex items-center gap-1.5 truncate">
+                    <Bookmark className="h-3.5 w-3.5 text-theme-accent fill-theme-accent/30 shrink-0" />
+                    <span className="truncate">Add to <strong className="font-bold underline decoration-theme-accent/50">{mostRecentList.name}</strong></span>
+                  </span>
+                  <span className="text-[9px] font-mono text-slate-400 shrink-0 ml-1 group-hover:text-white">
+                    {mostRecentList.items.reduce((acc, i) => acc + i.count, 0)}
+                  </span>
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => onToggleSubmenu(listSubmenuOpenId === card.oracle_id ? null : card.oracle_id)}
@@ -553,6 +574,25 @@ export const SniperCardItem: React.FC<SniperCardItemProps> = React.memo(({
                             </button>
 
                             <div className="border-t border-slate-800 my-1" />
+                            {mostRecentList && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  onToggleCardMenu(null);
+                                  onAddCardToList(inst.card_name, mostRecentList.id, mostRecentList.name, card);
+                                }}
+                                className="w-full px-2 py-1.5 rounded-lg text-left flex items-center justify-between bg-theme-accent/10 hover:bg-theme-accent/20 text-theme-accent border border-theme-accent/30 transition cursor-pointer font-semibold group"
+                                title={`Quick add "${inst.card_name}" to ${mostRecentList.name}`}
+                              >
+                                <span className="flex items-center gap-1.5 truncate">
+                                  <Bookmark className="h-3.5 w-3.5 text-theme-accent fill-theme-accent/30 shrink-0" />
+                                  <span className="truncate">Add to <strong className="font-bold underline decoration-theme-accent/50">{mostRecentList.name}</strong></span>
+                                </span>
+                                <span className="text-[9px] font-mono text-slate-400 shrink-0 ml-1 group-hover:text-white">
+                                  {mostRecentList.items.reduce((acc, i) => acc + i.count, 0)}
+                                </span>
+                              </button>
+                            )}
                             <button
                               type="button"
                               onClick={() => onToggleSubmenu(listSubmenuOpenId === inst.instance_id ? null : inst.instance_id)}
