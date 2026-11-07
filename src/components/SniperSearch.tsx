@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { 
   Search, 
   MapPin, 
@@ -15,7 +15,8 @@ import {
   Undo2,
   ArrowUpDown,
   Bookmark,
-  ChevronRight
+  ChevronRight,
+  Loader2
 } from 'lucide-react';
 import { CardInstance, ScryfallCard, CustomList } from '../types';
 import { db } from '../services/db';
@@ -29,6 +30,9 @@ import {
 } from '../services/scryfall';
 import { formatLocationId, parseLocationId, getSmartDefaultBatchLocation } from '../services/pickPath';
 import { playSound, triggerHaptic } from '../services/audio';
+import { useDebouncedSearch } from '../hooks/useDebounce';
+import { useWindowVirtualList } from '../hooks/useWindowVirtual';
+import { SniperCardItem } from './SniperCardItem';
 
 export type SortOption =
   | 'name_asc'
@@ -137,8 +141,21 @@ export function sortCards(
   });
 }
 
-export const SniperSearch: React.FC = () => {
-  const [query, setQuery] = useState('');
+interface SniperSearchProps {
+  isActive?: boolean;
+}
+
+export const SniperSearch: React.FC<SniperSearchProps> = React.memo(({ isActive = true }) => {
+  const {
+    input: searchInput,
+    setInput: setSearchInput,
+    debounced: debouncedQuery,
+    deferred: deferredQuery,
+    setImmediate: setQueryImmediate,
+    clear: clearQuery,
+    isPending: isSearchPending
+  } = useDebouncedSearch('', 300);
+
   const [scope, setScope] = useState<'inventory' | 'global'>('inventory');
   const [globalResults, setGlobalResults] = useState<ScryfallCard[]>([]);
   const [isSearchingGlobal, setIsSearchingGlobal] = useState(false);
@@ -172,7 +189,7 @@ export const SniperSearch: React.FC = () => {
     return new Map();
   });
 
-  const setRecentlyMoved = (updater: React.SetStateAction<Map<string, { fromLoc: string }>>) => {
+  const setRecentlyMoved = useCallback((updater: React.SetStateAction<Map<string, { fromLoc: string }>>) => {
     setRecentlyMovedState(prev => {
       const next = typeof updater === 'function' ? updater(prev) : updater;
       try {
@@ -180,9 +197,9 @@ export const SniperSearch: React.FC = () => {
       } catch {}
       return next;
     });
-  };
+  }, []);
 
-  const setRecentlyRemoved = (updater: React.SetStateAction<Map<string, CardInstance>>) => {
+  const setRecentlyRemoved = useCallback((updater: React.SetStateAction<Map<string, CardInstance>>) => {
     setRecentlyRemovedState(prev => {
       const next = typeof updater === 'function' ? updater(prev) : updater;
       try {
@@ -190,7 +207,7 @@ export const SniperSearch: React.FC = () => {
       } catch {}
       return next;
     });
-  };
+  }, []);
 
   // Editing coordinate modal
   const [editingInstance, setEditingInstance] = useState<CardInstance | null>(null);
@@ -217,14 +234,14 @@ export const SniperSearch: React.FC = () => {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [toastUndoAction, setToastUndoAction] = useState<(() => void) | null>(null);
 
-  const showToast = (msg: string, onUndo?: () => void) => {
+  const showToast = useCallback((msg: string, onUndo?: () => void) => {
     setToastMessage(msg);
     setToastUndoAction(onUndo ? () => onUndo : null);
     setTimeout(() => {
       setToastMessage(prev => (prev === msg ? null : prev));
       setToastUndoAction(null);
     }, 4500);
-  };
+  }, []);
 
   // Close open card dropdown menu when clicking anywhere outside
   useEffect(() => {
@@ -253,19 +270,19 @@ export const SniperSearch: React.FC = () => {
 
   // Autocomplete
   useEffect(() => {
-    if (query.length >= 2 && !query.includes(':')) {
-      scryfallAutocomplete(query).then(res => setSuggestions(res.slice(0, 5)));
+    if (debouncedQuery.length >= 2 && !debouncedQuery.includes(':')) {
+      scryfallAutocomplete(debouncedQuery).then(res => setSuggestions(res.slice(0, 5)));
     } else {
       setSuggestions([]);
     }
-  }, [query]);
+  }, [debouncedQuery]);
 
   // Global Scryfall Search
   useEffect(() => {
-    if (scope === 'global' && query.trim().length >= 2) {
+    if (scope === 'global' && debouncedQuery.trim().length >= 2) {
+      setIsSearchingGlobal(true);
       const timer = setTimeout(async () => {
-        setIsSearchingGlobal(true);
-        const results = await searchScryfallAPI(query);
+        const results = await searchScryfallAPI(debouncedQuery);
         setGlobalResults(results);
         setIsSearchingGlobal(false);
       }, 300);
@@ -273,7 +290,7 @@ export const SniperSearch: React.FC = () => {
     } else {
       setGlobalResults([]);
     }
-  }, [query, scope]);
+  }, [debouncedQuery, scope]);
 
   // Group instances by oracle_id and card_name
   const instancesByOracleId = useMemo(() => {
@@ -294,7 +311,7 @@ export const SniperSearch: React.FC = () => {
   const filteredCards = useMemo(() => {
     if (scope === 'global') return globalResults;
 
-    const clauses = parseSyntaxQuery(query);
+    const clauses = parseSyntaxQuery(deferredQuery);
 
     // Deduplicate cards by name, prioritizing canonical card with market price
     const dedupedMap = new Map<string, ScryfallCard>();
@@ -317,33 +334,33 @@ export const SniperSearch: React.FC = () => {
       const hasRemoved = Array.from(recentlyRemoved.values()).some(
         r => r.oracle_id === card.oracle_id || r.card_name.trim().toLowerCase() === cleanName
       );
-      if (!hasInstances && !hasRemoved && !query.trim()) return false;
-      if (!query.trim()) return true;
+      if (!hasInstances && !hasRemoved && !deferredQuery.trim()) return false;
+      if (!deferredQuery.trim()) return true;
       return cardMatchesSyntax(card, clauses);
     });
-  }, [cards, query, scope, globalResults, instancesByOracleId, recentlyRemoved]);
+  }, [cards, deferredQuery, scope, globalResults, instancesByOracleId, recentlyRemoved]);
 
-  const executeGlobalSearch = async (searchTerm: string) => {
+  const executeGlobalSearch = useCallback(async (searchTerm: string) => {
     if (!searchTerm.trim() || searchTerm.trim().length < 2) return;
     setIsSearchingGlobal(true);
     setSuggestions([]);
     const results = await searchScryfallAPI(searchTerm.trim());
     setGlobalResults(results);
     setIsSearchingGlobal(false);
-  };
+  }, []);
 
-  const handlePrimarySortChange = (newSort: SortOption) => {
+  const handlePrimarySortChange = useCallback((newSort: SortOption) => {
     setPrimarySort(newSort);
     localStorage.setItem('arcawms_search_sort_primary', newSort);
     localStorage.setItem('arcawms_search_sort', newSort);
     playSound('click');
-  };
+  }, []);
 
-  const handleSecondarySortChange = (newSort: SortOption) => {
+  const handleSecondarySortChange = useCallback((newSort: SortOption) => {
     setSecondarySort(newSort);
     localStorage.setItem('arcawms_search_sort_secondary', newSort);
     playSound('click');
-  };
+  }, []);
 
   // Quantity map for fast and accurate quantity-based sorting across chaos and decks
   const cardQuantityMap = useMemo(() => {
@@ -365,13 +382,26 @@ export const SniperSearch: React.FC = () => {
     return sortCards(filteredCards, primarySort, secondarySort, cardQuantityMap);
   }, [filteredCards, primarySort, secondarySort, cardQuantityMap]);
 
-  const addSyntaxPill = (filterText: string) => {
+  const addSyntaxPill = useCallback((filterText: string) => {
     playSound('click');
-    setQuery(prev => (prev.trim() ? `${prev.trim()} ${filterText}` : filterText));
-  };
+    setSearchInput(prev => {
+      const next = prev.trim() ? `${prev.trim()} ${filterText}` : filterText;
+      setQueryImmediate(next);
+      return next;
+    });
+  }, [setQueryImmediate, setSearchInput]);
+
+  const handleToggleCardMenu = useCallback((id: string | null) => {
+    setCardMenuOpenId(id);
+    setListSubmenuOpenId(null);
+  }, []);
+
+  const handleToggleSubmenu = useCallback((id: string | null) => {
+    setListSubmenuOpenId(id);
+  }, []);
 
   // 1. Pull to Brew & Decks
-  const handlePullToBrew = (inst: CardInstance) => {
+  const handlePullToBrew = useCallback((inst: CardInstance) => {
     playSound('pull');
     triggerHaptic('medium');
     const origLoc = inst.location_id || '1.A.01';
@@ -382,10 +412,10 @@ export const SniperSearch: React.FC = () => {
       next.set(inst.instance_id, { fromLoc: origLoc });
       return next;
     });
-  };
+  }, [setRecentlyMoved]);
 
   // Undo Move to Brew
-  const handleUndoMoveToBrew = (instanceId: string) => {
+  const handleUndoMoveToBrew = useCallback((instanceId: string) => {
     playSound('click');
     triggerHaptic('light');
     const record = recentlyMoved.get(instanceId);
@@ -397,10 +427,10 @@ export const SniperSearch: React.FC = () => {
         return next;
       });
     }
-  };
+  }, [recentlyMoved, setRecentlyMoved]);
 
   // 2. Remove for Sales & Trades
-  const handleRemoveForTrade = (inst: CardInstance) => {
+  const handleRemoveForTrade = useCallback((inst: CardInstance) => {
     playSound('pull');
     triggerHaptic('heavy');
     const snapshot: CardInstance = { ...inst };
@@ -421,10 +451,10 @@ export const SniperSearch: React.FC = () => {
       next.set(inst.instance_id, snapshot);
       return next;
     });
-  };
+  }, [recentlyMoved, setRecentlyMoved, setRecentlyRemoved]);
 
   // Undo Remove
-  const handleUndoRemove = (instanceId: string) => {
+  const handleUndoRemove = useCallback((instanceId: string) => {
     playSound('click');
     triggerHaptic('light');
     const saved = recentlyRemoved.get(instanceId);
@@ -436,15 +466,15 @@ export const SniperSearch: React.FC = () => {
         return next;
       });
     }
-  };
+  }, [recentlyRemoved, setRecentlyRemoved]);
 
   // Open return to chaos modal
-  const handleOpenReturnModal = (inst: CardInstance) => {
+  const handleOpenReturnModal = useCallback((inst: CardInstance) => {
     playSound('click');
     setReturningInstance(inst);
-  };
+  }, []);
 
-  const handleConfirmReturn = () => {
+  const handleConfirmReturn = useCallback(() => {
     if (!returningInstance) return;
     playSound('success');
     triggerHaptic('medium');
@@ -452,29 +482,29 @@ export const SniperSearch: React.FC = () => {
     const locId = formatLocationId(returnUnit, returnDrawer, effBatch);
     db.returnToChaos(returningInstance.instance_id, locId);
     setReturningInstance(null);
-  };
+  }, [returningInstance, returnBatch, returnUnit, returnDrawer]);
 
   // Edit coordinate modal
-  const handleOpenEdit = (inst: CardInstance) => {
+  const handleOpenEdit = useCallback((inst: CardInstance) => {
     playSound('click');
     const coord = parseLocationId(inst.location_id);
     setEditUnit(coord.valid ? coord.unit : 1);
     setEditDrawer(coord.valid ? coord.drawer : 'A');
     setEditBatch(coord.valid ? coord.batch_index : 1);
     setEditingInstance(inst);
-  };
+  }, []);
 
-  const handleSaveEdit = () => {
+  const handleSaveEdit = useCallback(() => {
     if (!editingInstance) return;
     playSound('success');
     const effBatch = typeof editBatch === 'number' && editBatch >= 1 ? editBatch : 1;
     const locId = formatLocationId(editUnit, editDrawer, effBatch);
     db.updateLocation(editingInstance.instance_id, locId);
     setEditingInstance(null);
-  };
+  }, [editingInstance, editBatch, editUnit, editDrawer]);
 
   // Open Quick Add with smart default batch location (< 12 non-empty batches)
-  const handleOpenQuickAdd = (card: ScryfallCard, defaultProxy = false) => {
+  const handleOpenQuickAdd = useCallback((card: ScryfallCard, defaultProxy = false) => {
     playSound('click');
     const smart = getSmartDefaultBatchLocation(db.getAllInstances(), db.getUnitCount());
     setAddUnit(smart.unit);
@@ -482,10 +512,10 @@ export const SniperSearch: React.FC = () => {
     setAddBatch(smart.batchIndex);
     setAddAsProxy(defaultProxy);
     setQuickAddCard(card);
-  };
+  }, []);
 
   // Add new physical copy (standard storage drawer or proxy box)
-  const handleConfirmQuickAdd = () => {
+  const handleConfirmQuickAdd = useCallback(() => {
     if (!quickAddCard) return;
     playSound('success');
     triggerHaptic('medium');
@@ -513,10 +543,10 @@ export const SniperSearch: React.FC = () => {
       showToast(`Added copy of "${quickAddCard.name}" to ${locId}`);
     }
     setQuickAddCard(null);
-  };
+  }, [quickAddCard, addAsProxy, addBatch, addUnit, addDrawer, showToast]);
 
   // Toggle Proxy status on card
-  const handleToggleProxy = (inst: CardInstance) => {
+  const handleToggleProxy = useCallback((inst: CardInstance) => {
     playSound('click');
     triggerHaptic('light');
     const snapshot: CardInstance = { ...inst };
@@ -535,10 +565,10 @@ export const SniperSearch: React.FC = () => {
     } else {
       showToast(`Marked "${inst.card_name}" as Real Card`, revert);
     }
-  };
+  }, [showToast]);
 
   // Toggle For Sale status on card (red border)
-  const handleToggleForSale = (inst: CardInstance) => {
+  const handleToggleForSale = useCallback((inst: CardInstance) => {
     playSound('click');
     triggerHaptic('light');
     const isForSale = db.toggleForSale(inst.instance_id);
@@ -548,19 +578,19 @@ export const SniperSearch: React.FC = () => {
     } else {
       showToast(`"${inst.card_name}" removed from sale`);
     }
-  };
+  }, [showToast]);
 
   // Move proxy card back into Proxy Box from Decks/Brewing
-  const handleMoveToProxyBox = (inst: CardInstance) => {
+  const handleMoveToProxyBox = useCallback((inst: CardInstance) => {
     playSound('pull');
     triggerHaptic('medium');
     db.returnToProxyBox(inst.instance_id);
     setCardMenuOpenId(null);
     showToast(`"${inst.card_name}" moved to Proxy Box`);
-  };
+  }, [showToast]);
 
   // Add to custom list
-  const handleAddCardToList = (cardName: string, listId: string, listName: string, metadata?: ScryfallCard) => {
+  const handleAddCardToList = useCallback((cardName: string, listId: string, listName: string, metadata?: ScryfallCard) => {
     playSound('success');
     triggerHaptic('light');
     const addedItem = db.addCardToCustomList(listId, cardName, 1, metadata);
@@ -573,9 +603,9 @@ export const SniperSearch: React.FC = () => {
         triggerHaptic('light');
       }
     });
-  };
+  }, [showToast]);
 
-  const handleQuickCreateListAndAdd = (cardName: string, metadata?: ScryfallCard) => {
+  const handleQuickCreateListAndAdd = useCallback((cardName: string, metadata?: ScryfallCard) => {
     const name = window.prompt('Enter new custom list name (e.g. EDH Wishlist, Binder):');
     if (!name || !name.trim()) return;
     playSound('click');
@@ -590,7 +620,15 @@ export const SniperSearch: React.FC = () => {
         triggerHaptic('light');
       }
     });
-  };
+  }, [showToast]);
+
+  // Window Virtualizer: render only visible cards to keep navigation, DOM, and typing ultra-fast
+  const { listRef, virtualItems, totalSize, scrollMargin, virtualizer } = useWindowVirtualList({
+    items: sortedCards,
+    estimateSize: 180,
+    overscan: 6,
+    isActive,
+  });
 
   return (
     <div className="max-w-4xl mx-auto px-4 sm:px-6 py-6 space-y-5">
@@ -601,14 +639,15 @@ export const SniperSearch: React.FC = () => {
             <Search className="absolute left-4 h-5 w-5 text-slate-400" />
             <input
               type="text"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
                   e.preventDefault();
                   setSuggestions([]);
-                  if (scope === 'global' && query.trim().length >= 2) {
-                    executeGlobalSearch(query);
+                  setQueryImmediate(searchInput);
+                  if (scope === 'global' && searchInput.trim().length >= 2) {
+                    executeGlobalSearch(searchInput);
                   }
                   (e.target as HTMLInputElement).blur();
                 } else if (e.key === 'Escape') {
@@ -619,10 +658,11 @@ export const SniperSearch: React.FC = () => {
               className="w-full bg-slate-900 border border-slate-700/80 rounded-2xl pl-12 pr-10 py-3.5 text-base text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-theme-primary shadow-lg font-sans"
               autoFocus
             />
-            {query && (
+            {searchInput && (
               <button
-                onClick={() => { setQuery(''); playSound('click'); }}
-                className="absolute right-3.5 p-1 rounded-lg text-slate-400 hover:text-white"
+                onClick={() => { clearQuery(); playSound('click'); }}
+                className="absolute right-3.5 p-1 rounded-lg text-slate-400 hover:text-white cursor-pointer"
+                title="Clear search"
               >
                 <X className="h-4 w-4" />
               </button>
@@ -635,8 +675,8 @@ export const SniperSearch: React.FC = () => {
               {suggestions.map((name, idx) => (
                 <button
                   key={idx}
-                  onClick={() => { setQuery(name); setSuggestions([]); playSound('click'); }}
-                  className="w-full text-left px-4 py-2.5 text-sm text-slate-200 hover:bg-theme-subtle hover:text-theme-primary flex items-center justify-between"
+                  onClick={() => { setQueryImmediate(name); setSuggestions([]); playSound('click'); }}
+                  className="w-full text-left px-4 py-2.5 text-sm text-slate-200 hover:bg-theme-subtle hover:text-theme-primary flex items-center justify-between cursor-pointer"
                 >
                   <span>{name}</span>
                   <span className="text-xs text-slate-500 font-mono">Select</span>
@@ -650,21 +690,21 @@ export const SniperSearch: React.FC = () => {
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
           <div className="flex flex-wrap items-center gap-1.5 font-mono">
             <span className="text-slate-500 text-[11px] mr-1">QUICK FILTERS:</span>
-            <button onClick={() => addSyntaxPill('cmc:1')} className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700">cmc:1</button>
-            <button onClick={() => addSyntaxPill('cmc:2')} className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700">cmc:2</button>
-            <button onClick={() => addSyntaxPill('cmc<=2')} className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700">cmc&lt;=2</button>
-            <button onClick={() => addSyntaxPill('p<=2')} className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700">p&lt;=2</button>
-            <button onClick={() => addSyntaxPill('t:creature')} className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700">t:creature</button>
-            <button onClick={() => addSyntaxPill('c:u')} className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700">c:u</button>
-            <button onClick={() => addSyntaxPill('id<=wu')} className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700">id&lt;=wu</button>
-            <button onClick={() => addSyntaxPill('otag:removal')} className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700">otag:removal</button>
-            <button onClick={() => addSyntaxPill('o:"draw"')} className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700">o:draw</button>
+            <button onClick={() => addSyntaxPill('cmc:1')} className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700 cursor-pointer">cmc:1</button>
+            <button onClick={() => addSyntaxPill('cmc:2')} className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700 cursor-pointer">cmc:2</button>
+            <button onClick={() => addSyntaxPill('cmc<=2')} className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700 cursor-pointer">cmc&lt;=2</button>
+            <button onClick={() => addSyntaxPill('p<=2')} className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700 cursor-pointer">p&lt;=2</button>
+            <button onClick={() => addSyntaxPill('t:creature')} className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700 cursor-pointer">t:creature</button>
+            <button onClick={() => addSyntaxPill('c:u')} className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700 cursor-pointer">c:u</button>
+            <button onClick={() => addSyntaxPill('id<=wu')} className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700 cursor-pointer">id&lt;=wu</button>
+            <button onClick={() => addSyntaxPill('otag:removal')} className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700 cursor-pointer">otag:removal</button>
+            <button onClick={() => addSyntaxPill('o:"draw"')} className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700 cursor-pointer">o:draw</button>
           </div>
 
           <div className="inline-flex p-0.5 bg-slate-900 rounded-lg border border-slate-800 font-mono text-[11px]">
             <button
               onClick={() => { setScope('inventory'); playSound('click'); }}
-              className={`px-2.5 py-1 rounded-md transition ${
+              className={`px-2.5 py-1 rounded-md transition cursor-pointer ${
                 scope === 'inventory' ? 'bg-theme-primary text-slate-950 font-bold' : 'text-slate-400 hover:text-white'
               }`}
             >
@@ -672,7 +712,7 @@ export const SniperSearch: React.FC = () => {
             </button>
             <button
               onClick={() => { setScope('global'); playSound('click'); }}
-              className={`px-2.5 py-1 rounded-md transition flex items-center gap-1 ${
+              className={`px-2.5 py-1 rounded-md transition flex items-center gap-1 cursor-pointer ${
                 scope === 'global' ? 'bg-theme-primary text-slate-950 font-bold' : 'text-slate-400 hover:text-white'
               }`}
             >
@@ -687,13 +727,16 @@ export const SniperSearch: React.FC = () => {
       <div className="flex flex-wrap items-center justify-between gap-3 px-1 pt-1 border-b border-slate-800/80 pb-3">
         <div className="flex items-center gap-2 text-xs font-mono text-slate-400">
           <span>
-            {query.trim() ? 'Matching cards:' : 'Full collection:'}{' '}
+            {deferredQuery.trim() ? 'Matching cards:' : 'Full collection:'}{' '}
             <strong className="text-white font-bold">{sortedCards.length}</strong>
           </span>
-          {query.trim() && (
+          {deferredQuery.trim() && (
             <span className="text-slate-500">
-              for &quot;<span className="text-theme-accent">{query}</span>&quot;
+              for &quot;<span className="text-theme-accent">{deferredQuery}</span>&quot;
             </span>
+          )}
+          {isSearchPending && (
+            <Loader2 className="h-3 w-3 animate-spin text-theme-accent ml-1" />
           )}
         </div>
 
@@ -740,573 +783,83 @@ export const SniperSearch: React.FC = () => {
         </div>
       )}
 
-      {/* Cards List */}
-      <div className="space-y-4">
+      {/* Cards List with Window Virtualization */}
+      <div>
         {sortedCards.length === 0 && !isSearchingGlobal && (
           <div className="p-10 text-center bg-slate-900/60 rounded-2xl border border-slate-800 text-slate-400 text-xs">
-            No cards matched &quot;{query}&quot;. Try switching to Scryfall search or clearing filters.
+            No cards matched &quot;{deferredQuery || searchInput}&quot;. Try switching to Scryfall search or clearing filters.
           </div>
         )}
 
-        {sortedCards.map((card) => {
-          const rawInstances = [
-            ...(instancesByOracleId.get(card.oracle_id) || []),
-            ...(instancesByOracleId.get(card.name.trim().toLowerCase()) || [])
-          ];
-          const cardInstances = Array.from(new Map(rawInstances.map(i => [i.instance_id, i])).values());
-          
-          // Also look for recently removed instances for this card to show on-page undo
-          const removedForCard = Array.from(recentlyRemoved.values()).filter(
-            r => r.oracle_id === card.oracle_id || r.card_name.trim().toLowerCase() === card.name.trim().toLowerCase()
-          );
+        {sortedCards.length > 0 && (
+          <div
+            ref={listRef}
+            style={{
+              height: `${totalSize}px`,
+              width: '100%',
+              position: 'relative',
+            }}
+          >
+            {virtualItems.map((virtualItem) => {
+              const card = sortedCards[virtualItem.index];
+              if (!card) return null;
 
-          const cardHasForSale = cardInstances.some(i => i.is_for_sale);
-          const cardHasBrewProxy = cardInstances.some(i => i.is_proxy && i.state === 'B');
-          const isAnyCardMenuOpen = cardMenuOpenId === card.oracle_id || cardInstances.some(i => i.instance_id === cardMenuOpenId);
+              const rawInstances = [
+                ...(instancesByOracleId.get(card.oracle_id) || []),
+                ...(instancesByOracleId.get(card.name.trim().toLowerCase()) || [])
+              ];
+              const cardInstances = Array.from(new Map(rawInstances.map(i => [i.instance_id, i])).values());
 
-          return (
-            <div
-              key={card.oracle_id}
-              className={`bg-slate-900 rounded-2xl p-4 sm:p-5 shadow-lg flex flex-col sm:flex-row gap-4 sm:gap-5 transition-all relative ${
-                isAnyCardMenuOpen ? 'z-30' : 'z-0'
-              } ${
-                cardHasForSale
-                  ? 'border-2 border-red-500/80 shadow-[0_0_15px_rgba(239,68,68,0.25)]'
-                  : 'border border-slate-800'
-              }`}
-            >
-              {/* Reliable Card Image with Automatic Fallback & Floating Top-Left '+' Menu */}
-              <div className={`relative w-24 sm:w-28 shrink-0 self-start ${cardMenuOpenId === card.oracle_id ? 'z-30' : 'z-10'}`}>
-                {/* Visual Image Box (maintains rounded corners without clipping menu popup) */}
-                <div className={`relative w-full rounded-xl overflow-hidden bg-slate-950 shadow transition-all ${
-                  cardHasForSale
-                    ? 'border-for-sale'
-                    : cardHasBrewProxy
-                    ? 'border-proxy-theme'
-                    : 'border border-slate-800'
-                }`}>
-                  <img
-                    src={card.image_url_normal || getScryfallImageFallback(card.name)}
-                    alt={card.name}
-                    loading="lazy"
-                    className="w-full h-auto object-cover block"
-                    onError={(e) => {
-                      e.currentTarget.src = CARD_BACK_IMAGE;
-                    }}
+              const removedForCard = Array.from(recentlyRemoved.values()).filter(
+                r => r.oracle_id === card.oracle_id || r.card_name.trim().toLowerCase() === card.name.trim().toLowerCase()
+              );
+
+              const isAnyCardMenuOpen = cardMenuOpenId === card.oracle_id || cardInstances.some(i => i.instance_id === cardMenuOpenId);
+
+              return (
+                <div
+                  key={card.oracle_id || virtualItem.key}
+                  data-index={virtualItem.index}
+                  ref={virtualizer.measureElement}
+                  className="pb-4"
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    width: '100%',
+                    transform: `translateY(${virtualItem.start - scrollMargin}px)`,
+                    zIndex: isAnyCardMenuOpen ? 30 : 1,
+                  }}
+                >
+                  <SniperCardItem
+                    card={card}
+                    cardInstances={cardInstances}
+                    removedForCard={removedForCard}
+                    isAnyCardMenuOpen={isAnyCardMenuOpen}
+                    cardMenuOpenId={cardMenuOpenId}
+                    listSubmenuOpenId={listSubmenuOpenId}
+                    customLists={customLists}
+                    recentlyMoved={recentlyMoved}
+                    onToggleCardMenu={handleToggleCardMenu}
+                    onToggleSubmenu={handleToggleSubmenu}
+                    onOpenQuickAdd={handleOpenQuickAdd}
+                    onToggleProxy={handleToggleProxy}
+                    onToggleForSale={handleToggleForSale}
+                    onAddCardToList={handleAddCardToList}
+                    onQuickCreateListAndAdd={handleQuickCreateListAndAdd}
+                    onUndoRemove={handleUndoRemove}
+                    onPullToBrew={handlePullToBrew}
+                    onRemoveForTrade={handleRemoveForTrade}
+                    onOpenEdit={handleOpenEdit}
+                    onUndoMoveToBrew={handleUndoMoveToBrew}
+                    onMoveToProxyBox={handleMoveToProxyBox}
+                    onOpenReturn={handleOpenReturnModal}
                   />
-
-                  {/* Status Badges Overlay on Image */}
-                  <div className="absolute top-1.5 right-1.5 flex flex-col items-end gap-1 pointer-events-none">
-                    {cardHasForSale && (
-                      <span className="px-1.5 py-0.5 rounded bg-rose-600/90 text-white font-mono font-black text-[9px] shadow uppercase tracking-wider">
-                        FOR SALE
-                      </span>
-                    )}
-                    {cardHasBrewProxy && !cardHasForSale && (
-                      <span className="px-1.5 py-0.5 rounded bg-purple-600/90 text-white font-mono font-black text-[9px] shadow uppercase tracking-wider">
-                        PROXY
-                      </span>
-                    )}
-                  </div>
                 </div>
-
-                {/* Top-Left `+` Menu Button & Unclipped Floating Dropdown Menu */}
-                <div className={`absolute top-1.5 left-1.5 ${cardMenuOpenId === card.oracle_id ? 'z-30' : 'z-10'}`}>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setCardMenuOpenId(cardMenuOpenId === card.oracle_id ? null : card.oracle_id);
-                    }}
-                    className={`h-6 w-6 rounded-full flex items-center justify-center transition shadow-lg cursor-pointer ${
-                      cardMenuOpenId === card.oracle_id
-                        ? 'bg-theme-accent text-slate-950 font-black ring-2 ring-theme-accent/60'
-                        : 'bg-slate-950/85 hover:bg-slate-900 text-white border border-slate-700/80 hover:border-theme-accent'
-                    }`}
-                    title="Card options menu"
-                  >
-                    <Plus className="h-3.5 w-3.5" />
-                  </button>
-
-                  {cardMenuOpenId === card.oracle_id && (
-                    <div
-                      onClick={(e) => e.stopPropagation()}
-                      className="absolute left-0 top-7 w-60 sm:w-64 bg-slate-900/98 border border-slate-700 rounded-xl shadow-2xl p-2 z-50 space-y-1 text-xs backdrop-blur-md animate-in fade-in"
-                    >
-                      {cardInstances.length === 0 ? (
-                        <div className="space-y-1">
-                          <div className="text-[10px] text-slate-400 font-mono px-2 py-0.5 font-bold">ADD TO COLLECTION</div>
-                          <button
-                            type="button"
-                            onClick={() => { setCardMenuOpenId(null); handleOpenQuickAdd(card, false); }}
-                            className="w-full px-2 py-1.5 rounded-lg text-left flex items-center gap-1.5 hover:bg-slate-800 text-slate-200 cursor-pointer"
-                          >
-                            <Plus className="h-3.5 w-3.5 text-theme-accent" />
-                            <span>+ Add Real Copy</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => { setCardMenuOpenId(null); handleOpenQuickAdd(card, true); }}
-                            className="w-full px-2 py-1.5 rounded-lg text-left flex items-center gap-1.5 hover:bg-slate-800 text-purple-300 cursor-pointer"
-                          >
-                            <Sparkles className="h-3.5 w-3.5 text-purple-400" />
-                            <span>+ Add Proxy (to Proxy Box)</span>
-                          </button>
-                        </div>
-                      ) : cardInstances.length === 1 ? (
-                        <div className="space-y-1">
-                          <div className="text-[10px] text-slate-400 font-mono px-2 py-0.5 font-bold">
-                            CARD STATUS
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => handleToggleProxy(cardInstances[0])}
-                            className="w-full px-2 py-1.5 rounded-lg text-left flex items-center justify-between hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
-                          >
-                            <span className="flex items-center gap-1.5">
-                              <Sparkles className="h-3.5 w-3.5 text-purple-400" />
-                              <span>{cardInstances[0].is_proxy ? 'Mark as Real Card' : 'Mark as Proxy'}</span>
-                            </span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleToggleForSale(cardInstances[0])}
-                            className="w-full px-2 py-1.5 rounded-lg text-left flex items-center justify-between hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
-                          >
-                            <span className="flex items-center gap-1.5">
-                              <ShoppingBag className="h-3.5 w-3.5 text-rose-400" />
-                              <span>{cardInstances[0].is_for_sale ? 'Remove from Sale' : 'Mark For Sale (eBay)'}</span>
-                            </span>
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="space-y-1.5 max-h-56 overflow-y-auto">
-                          <div className="text-[10px] text-slate-400 font-mono px-2 py-0.5 font-bold">
-                            MANAGE COPIES ({cardInstances.length})
-                          </div>
-                          {cardInstances.map((inst, cIdx) => (
-                            <div key={inst.instance_id} className="p-1.5 rounded bg-slate-950/60 border border-slate-800 space-y-1">
-                              <div className="text-[10px] text-theme-accent font-mono font-bold flex justify-between">
-                                <span>Copy #{cIdx + 1}</span>
-                                <span className="text-slate-400 truncate max-w-[90px]">{inst.location_id || (inst.state === 'B' ? 'Brewing' : 'Proxy Box')}</span>
-                              </div>
-                              <div className="grid grid-cols-2 gap-1 text-[11px]">
-                                <button
-                                  type="button"
-                                  onClick={() => handleToggleProxy(inst)}
-                                  className={`px-1.5 py-1 rounded text-center border font-mono cursor-pointer ${
-                                    inst.is_proxy
-                                      ? 'bg-purple-950/60 border-purple-500/50 text-purple-300'
-                                      : 'bg-slate-900 border-slate-700 text-slate-300'
-                                  }`}
-                                >
-                                  {inst.is_proxy ? 'Proxy ✓' : 'Real'}
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => handleToggleForSale(inst)}
-                                  className={`px-1.5 py-1 rounded text-center border font-mono cursor-pointer ${
-                                    inst.is_for_sale
-                                      ? 'bg-rose-950/60 border-rose-500/50 text-rose-300 font-bold'
-                                      : 'bg-slate-900 border-slate-700 text-slate-300'
-                                  }`}
-                                >
-                                  {inst.is_for_sale ? 'Sale ✓' : 'Keep'}
-                                </button>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-
-                      <div className="border-t border-slate-800 my-1" />
-                      <button
-                        type="button"
-                        onClick={() => setListSubmenuOpenId(listSubmenuOpenId === card.oracle_id ? null : card.oracle_id)}
-                        className="w-full px-2 py-1.5 rounded-lg text-left flex items-center justify-between hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
-                      >
-                        <span className="flex items-center gap-1.5">
-                          <Bookmark className="h-3.5 w-3.5 text-theme-accent" />
-                          <span>Add to List...</span>
-                        </span>
-                        <ChevronRight className={`h-3 w-3 text-slate-400 transition-transform ${listSubmenuOpenId === card.oracle_id ? 'rotate-90' : ''}`} />
-                      </button>
-
-                      {listSubmenuOpenId === card.oracle_id && (
-                        <div className="p-1 space-y-1 bg-slate-950/70 rounded-lg border border-slate-800 max-h-48 overflow-y-auto">
-                          {customLists.map(list => (
-                            <button
-                              key={list.id}
-                              type="button"
-                              onClick={() => handleAddCardToList(card.name, list.id, list.name, card)}
-                              className="w-full px-2 py-1 rounded text-left flex items-center justify-between hover:bg-slate-800 text-slate-300 hover:text-white transition cursor-pointer text-[11px]"
-                            >
-                              <span className="truncate max-w-[130px]">{list.name}</span>
-                              <span className="text-[9px] font-mono text-slate-500">{list.items.reduce((acc, i) => acc + i.count, 0)}</span>
-                            </button>
-                          ))}
-                          <button
-                            type="button"
-                            onClick={() => handleQuickCreateListAndAdd(card.name, card)}
-                            className="w-full px-2 py-1 rounded text-left flex items-center gap-1 text-theme-accent hover:brightness-110 hover:bg-slate-800 transition cursor-pointer text-[11px] font-semibold"
-                          >
-                            <Plus className="h-3 w-3" />
-                            <span>+ New List</span>
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Card Details & Copies */}
-              <div className="flex-1 min-w-0 space-y-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <h2 className="text-lg font-bold text-white flex items-center gap-2">
-                      <span>{card.name}</span>
-                      {card.mana_cost && (
-                        <span className="text-xs font-mono text-theme-accent bg-theme-accent-subtle px-2 py-0.5 rounded border border-theme-accent-subtle">
-                          {card.mana_cost}
-                        </span>
-                      )}
-                    </h2>
-                    <div className="text-xs text-slate-400 mt-0.5">
-                      {card.type_line} • CMC {card.cmc} • <span className="text-emerald-400 font-mono font-medium">€{card.price_eur ? card.price_eur.toFixed(2) : '0.00'}</span>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      onClick={() => handleOpenQuickAdd(card, false)}
-                      className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-slate-300 hover:text-white flex items-center gap-1.5 border border-slate-700 transition cursor-pointer"
-                    >
-                      <Plus className="h-3.5 w-3.5 text-theme-accent" />
-                      <span>+ Add Copy</span>
-                    </button>
-                    <button
-                      onClick={() => handleOpenQuickAdd(card, true)}
-                      className="px-2.5 py-1.5 rounded-lg bg-purple-950/40 hover:bg-purple-900/50 text-xs text-purple-300 hover:text-white flex items-center gap-1.5 border border-purple-800/50 transition cursor-pointer"
-                      title="Add as proxy to Offline Proxy Box"
-                    >
-                      <Sparkles className="h-3.5 w-3.5 text-purple-400" />
-                      <span>+ Proxy</span>
-                    </button>
-                  </div>
-                </div>
-
-                {/* Copies list */}
-                <div className="space-y-2 pt-1">
-                  {cardInstances.length === 0 && removedForCard.length === 0 ? (
-                    <div className="text-xs text-slate-500 italic">
-                      None in your inventory. Tap &quot;+ Add Copy&quot; to assign a drawer coordinate or &quot;+ Proxy&quot; for Proxy Box.
-                    </div>
-                  ) : (
-                    <>
-                      {/* Recently removed copies (with instant on-page Undo) */}
-                      {removedForCard.map((rem) => (
-                        <div
-                          key={`rem-${rem.instance_id}`}
-                          className="flex flex-col sm:flex-row sm:items-center justify-between p-2.5 rounded-xl bg-rose-950/30 border border-rose-800/60 gap-2 text-xs transition"
-                        >
-                          <div className="flex items-center gap-2">
-                            <span className="px-2.5 py-1 rounded-lg bg-rose-500/20 text-rose-300 font-mono-coordinate font-black text-sm border border-rose-500/40 line-through flex items-center gap-1">
-                              <MapPin className="h-3.5 w-3.5 text-rose-400" />
-                              <span>{rem.location_id || 'DRAWER'}</span>
-                            </span>
-                            <span className="text-rose-300 font-mono text-[11px] font-bold">
-                              Removed for Trade / Sale
-                            </span>
-                          </div>
-
-                          <button
-                            onClick={() => handleUndoRemove(rem.instance_id)}
-                            className="px-3.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-mono font-bold text-xs flex items-center gap-1.5 shadow cursor-pointer self-end sm:self-auto"
-                            title="Undo remove and restore back to collection"
-                          >
-                            <Undo2 className="h-3.5 w-3.5" />
-                            <span>REMOVED (UNDO ↺)</span>
-                          </button>
-                        </div>
-                      ))}
-
-                      {/* Active copies */}
-                      {cardInstances.map((inst) => {
-                        const isInChaos = inst.state === 'A';
-                        const isInProxyBox = inst.state === 'P' || (inst.is_proxy && inst.state !== 'B');
-                        const isInBrewing = inst.state === 'B';
-                        const isProxy = !!inst.is_proxy;
-                        const isForSale = !!inst.is_for_sale;
-                        const recentlyMovedBrew = recentlyMoved.has(inst.instance_id);
-
-                        const borderClass = isForSale
-                          ? 'border-for-sale bg-rose-950/20'
-                          : (isInBrewing && isProxy)
-                          ? 'border-proxy-theme bg-purple-950/20'
-                          : recentlyMovedBrew 
-                          ? 'bg-blue-950/30 border-blue-800/60' 
-                          : 'bg-slate-950 border-slate-800/80';
-
-                        return (
-                          <div
-                            key={inst.instance_id}
-                            className={`flex flex-col sm:flex-row sm:items-center justify-between p-2.5 rounded-xl border gap-2 text-xs transition relative ${cardMenuOpenId === inst.instance_id ? 'z-30' : 'z-0'} ${borderClass}`}
-                          >
-                            <div className="flex flex-wrap items-center gap-2">
-                              {isInChaos ? (
-                                <div className="flex items-center gap-2">
-                                  <span className="px-2.5 py-1 rounded-lg bg-theme-accent-subtle text-theme-accent font-mono-coordinate font-black text-sm border border-theme-accent-subtle flex items-center gap-1">
-                                    <MapPin className="h-3.5 w-3.5" />
-                                    <span>{inst.location_id || 'UNASSIGNED'}</span>
-                                  </span>
-                                  <span className="text-slate-400 font-mono text-[11px] hidden sm:inline">In Chaos Drawer</span>
-                                </div>
-                              ) : isInProxyBox ? (
-                                <div className="flex items-center gap-2">
-                                  <span className="px-2.5 py-1 rounded-lg bg-purple-500/20 text-purple-300 font-mono font-bold text-xs border border-purple-500/40 flex items-center gap-1">
-                                    <Sparkles className="h-3.5 w-3.5 text-purple-400" />
-                                    <span>Proxy Box</span>
-                                  </span>
-                                  <span className="text-purple-300/80 font-mono text-[11px] font-medium">£0.00 (Proxy)</span>
-                                </div>
-                              ) : recentlyMovedBrew ? (
-                                <div className="flex items-center gap-2">
-                                  <span className="px-2.5 py-1 rounded-lg bg-blue-500/20 text-blue-300 font-mono-coordinate font-black text-sm border border-blue-500/40 flex items-center gap-1">
-                                    <MapPin className="h-3.5 w-3.5 text-blue-400" />
-                                    <span>{recentlyMoved.get(inst.instance_id)?.fromLoc}</span>
-                                  </span>
-                                  <span className="text-blue-300 font-mono text-[11px] font-bold">➔ In Decks / Brewing</span>
-                                  {isProxy && (
-                                    <span className="text-purple-300 font-mono text-[11px] font-bold">(Proxy £0.00)</span>
-                                  )}
-                                </div>
-                              ) : (
-                                <div className="flex items-center gap-2">
-                                  <span className="px-2.5 py-1 rounded-lg bg-blue-500/20 text-blue-300 font-mono text-xs border border-blue-500/30 font-bold">
-                                    In Decks / Brewing
-                                  </span>
-                                  {isProxy && (
-                                    <span className="text-purple-300 font-mono text-[11px] font-bold">Proxy • £0.00</span>
-                                  )}
-                                </div>
-                              )}
-
-                              {isForSale && (
-                                <span className="px-2 py-0.5 rounded bg-rose-500/25 text-rose-300 font-mono text-[10px] font-black border border-rose-500/50 uppercase tracking-wider">
-                                  FOR SALE (eBay)
-                                </span>
-                              )}
-                            </div>
-
-                            {/* Actions & Dropdown */}
-                            <div className="flex items-center gap-2 self-end sm:self-auto relative">
-                              {isInChaos ? (
-                                <>
-                                  {/* Option 1: Pull to Brewing */}
-                                  <button
-                                    onClick={() => handlePullToBrew(inst)}
-                                    className="px-2.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white font-bold font-mono text-xs shadow flex items-center gap-1 cursor-pointer"
-                                    title="Add to brewing and decks pool"
-                                  >
-                                    <Layers className="h-3 w-3" />
-                                    <span>To Brew</span>
-                                  </button>
-
-                                  {/* Option 2: Remove for Trade/Sale */}
-                                  <button
-                                    onClick={() => handleRemoveForTrade(inst)}
-                                    className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-rose-900/60 text-slate-300 hover:text-rose-200 border border-slate-700 font-mono text-xs flex items-center gap-1 cursor-pointer"
-                                    title="Remove from collection for sales and trades"
-                                  >
-                                    <ShoppingBag className="h-3 w-3 text-rose-400" />
-                                    <span>Trade / Sell</span>
-                                  </button>
-
-                                  {/* Edit coordinate */}
-                                  <button
-                                    onClick={() => handleOpenEdit(inst)}
-                                    className="p-1.5 rounded-lg text-slate-500 hover:text-white hover:bg-slate-800 cursor-pointer"
-                                    title="Change coordinate"
-                                  >
-                                    <Edit3 className="h-3.5 w-3.5" />
-                                  </button>
-                                </>
-                              ) : isInProxyBox ? (
-                                <>
-                                  {/* Proxy Box Options: To Brew or Remove */}
-                                  <button
-                                    onClick={() => handlePullToBrew(inst)}
-                                    className="px-2.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white font-bold font-mono text-xs shadow flex items-center gap-1 cursor-pointer"
-                                    title="Move proxy into Active Decks / Brewing pool"
-                                  >
-                                    <Layers className="h-3 w-3" />
-                                    <span>To Brew</span>
-                                  </button>
-
-                                  <button
-                                    onClick={() => handleRemoveForTrade(inst)}
-                                    className="p-1.5 rounded-lg text-slate-600 hover:text-rose-400 hover:bg-slate-800 cursor-pointer"
-                                    title="Remove proxy from collection"
-                                  >
-                                    <Trash2 className="h-3.5 w-3.5" />
-                                  </button>
-                                </>
-                              ) : recentlyMovedBrew ? (
-                                <>
-                                  {/* In Brew: If just moved on this page, show Undo button */}
-                                  <button
-                                    onClick={() => handleUndoMoveToBrew(inst.instance_id)}
-                                    className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-mono font-bold text-xs flex items-center gap-1 shadow cursor-pointer"
-                                    title="Undo pull and return to drawer coordinate"
-                                  >
-                                    <Undo2 className="h-3 w-3" />
-                                    <span>IN BREW (UNDO ↺)</span>
-                                  </button>
-
-                                  <button
-                                    onClick={() => handleRemoveForTrade(inst)}
-                                    className="p-1.5 rounded-lg text-slate-600 hover:text-rose-400 hover:bg-slate-800 cursor-pointer"
-                                    title="Remove from collection"
-                                  >
-                                    <Trash2 className="h-3.5 w-3.5" />
-                                  </button>
-                                </>
-                              ) : isProxy ? (
-                                <>
-                                  {/* Proxy in Brewing: Rule says can only return to Proxy Box, NOT units */}
-                                  <button
-                                    onClick={() => handleMoveToProxyBox(inst)}
-                                    className="px-2.5 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-bold font-mono text-xs shadow flex items-center gap-1 cursor-pointer"
-                                    title="Return proxy back to Proxy Box"
-                                  >
-                                    <RotateCcw className="h-3 w-3" />
-                                    <span>To Proxy Box</span>
-                                  </button>
-
-                                  <button
-                                    onClick={() => handleRemoveForTrade(inst)}
-                                    className="p-1.5 rounded-lg text-slate-600 hover:text-rose-400 hover:bg-slate-800 cursor-pointer"
-                                    title="Remove from collection"
-                                  >
-                                    <Trash2 className="h-3.5 w-3.5" />
-                                  </button>
-                                </>
-                              ) : (
-                                <>
-                                  <button
-                                    onClick={() => handleOpenReturnModal(inst)}
-                                    className="px-3 py-1.5 rounded-lg bg-theme-accent hover:bg-theme-accent-hover text-slate-950 font-bold font-mono text-xs shadow flex items-center gap-1 cursor-pointer"
-                                    title="Return to Chaos Drawers"
-                                  >
-                                    <RotateCcw className="h-3 w-3" />
-                                    <span>Return to Drawers</span>
-                                  </button>
-
-                                  <button
-                                    onClick={() => handleRemoveForTrade(inst)}
-                                    className="p-1.5 rounded-lg text-slate-600 hover:text-rose-400 hover:bg-slate-800 cursor-pointer"
-                                    title="Remove from collection"
-                                  >
-                                    <Trash2 className="h-3.5 w-3.5" />
-                                  </button>
-                                </>
-                              )}
-
-                              {/* Copy Individual Options Menu Toggle */}
-                              <div className={`relative ${cardMenuOpenId === inst.instance_id ? 'z-40' : ''}`}>
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setCardMenuOpenId(cardMenuOpenId === inst.instance_id ? null : inst.instance_id);
-                                  }}
-                                  className={`p-1.5 rounded-lg transition border cursor-pointer ${
-                                    cardMenuOpenId === inst.instance_id
-                                      ? 'bg-theme-accent text-slate-950 border-theme-accent'
-                                      : 'text-slate-400 hover:text-white bg-slate-900 border-slate-700/80 hover:bg-slate-800'
-                                  }`}
-                                  title="Copy status settings"
-                                >
-                                  <Plus className="h-3 w-3" />
-                                </button>
-
-                                {cardMenuOpenId === inst.instance_id && (
-                                  <div
-                                    onClick={(e) => e.stopPropagation()}
-                                    className="absolute right-0 top-8 w-52 sm:w-56 bg-slate-900/98 border border-slate-700 rounded-xl shadow-2xl p-1.5 z-50 space-y-1 text-xs backdrop-blur-md animate-in fade-in"
-                                  >
-                                    <button
-                                      type="button"
-                                      onClick={() => handleToggleProxy(inst)}
-                                      className="w-full px-2 py-1.5 rounded-lg text-left flex items-center justify-between hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
-                                    >
-                                      <span className="flex items-center gap-1.5">
-                                        <Sparkles className="h-3.5 w-3.5 text-purple-400" />
-                                        <span>{inst.is_proxy ? 'Mark as Real Card' : 'Mark as Proxy'}</span>
-                                      </span>
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => handleToggleForSale(inst)}
-                                      className="w-full px-2 py-1.5 rounded-lg text-left flex items-center justify-between hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
-                                    >
-                                      <span className="flex items-center gap-1.5">
-                                        <ShoppingBag className="h-3.5 w-3.5 text-rose-400" />
-                                        <span>{inst.is_for_sale ? 'Remove from Sale' : 'Mark For Sale (eBay)'}</span>
-                                      </span>
-                                    </button>
-
-                                    <div className="border-t border-slate-800 my-1" />
-                                    <button
-                                      type="button"
-                                      onClick={() => setListSubmenuOpenId(listSubmenuOpenId === inst.instance_id ? null : inst.instance_id)}
-                                      className="w-full px-2 py-1.5 rounded-lg text-left flex items-center justify-between hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
-                                    >
-                                      <span className="flex items-center gap-1.5">
-                                        <Bookmark className="h-3.5 w-3.5 text-theme-accent" />
-                                        <span>Add to List...</span>
-                                      </span>
-                                      <ChevronRight className={`h-3 w-3 text-slate-400 transition-transform ${listSubmenuOpenId === inst.instance_id ? 'rotate-90' : ''}`} />
-                                    </button>
-
-                                    {listSubmenuOpenId === inst.instance_id && (
-                                      <div className="p-1 space-y-1 bg-slate-950/70 rounded-lg border border-slate-800 max-h-48 overflow-y-auto">
-                                        {customLists.map(list => (
-                                          <button
-                                            key={list.id}
-                                            type="button"
-                                            onClick={() => handleAddCardToList(inst.card_name, list.id, list.name)}
-                                            className="w-full px-2 py-1 rounded text-left flex items-center justify-between hover:bg-slate-800 text-slate-300 hover:text-white transition cursor-pointer text-[11px]"
-                                          >
-                                            <span className="truncate max-w-[130px]">{list.name}</span>
-                                            <span className="text-[9px] font-mono text-slate-500">{list.items.reduce((acc, i) => acc + i.count, 0)}</span>
-                                          </button>
-                                        ))}
-                                        <button
-                                          type="button"
-                                          onClick={() => handleQuickCreateListAndAdd(inst.card_name)}
-                                          className="w-full px-2 py-1 rounded text-left flex items-center gap-1 text-theme-accent hover:text-theme-accent-hover hover:bg-slate-800 transition cursor-pointer text-[11px] font-semibold"
-                                        >
-                                          <Plus className="h-3 w-3" />
-                                          <span>+ New List</span>
-                                        </button>
-                                      </div>
-                                    )}
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </>
-                  )}
-                </div>
-              </div>
-            </div>
-          );
-        })}
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* MODAL: Return to Chaos Drawers */}
@@ -1599,4 +1152,4 @@ export const SniperSearch: React.FC = () => {
       )}
     </div>
   );
-};
+});

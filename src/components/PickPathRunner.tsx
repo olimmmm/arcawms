@@ -33,11 +33,12 @@ const SAMPLE_WANTS = `1 Sol Ring
 1 Demonic Tutor`;
 
 interface PickPathRunnerProps {
+  isActive?: boolean;
   pendingDecklist?: string;
   onClearPendingDecklist?: () => void;
 }
 
-export const PickPathRunner: React.FC<PickPathRunnerProps> = ({ pendingDecklist, onClearPendingDecklist }) => {
+export const PickPathRunner: React.FC<PickPathRunnerProps> = React.memo(({ isActive = true, pendingDecklist, onClearPendingDecklist }) => {
   const [phase, setPhase] = useState<'setup' | 'running'>('setup');
   const [decklistText, setDecklistText] = useState('');
   const [route, setRoute] = useState<PickItem[]>([]);
@@ -550,4 +551,4 @@ export const PickPathRunner: React.FC<PickPathRunnerProps> = ({ pendingDecklist,
       )}
     </div>
   );
-};
+});

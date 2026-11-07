@@ -1,4 +1,6 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { useDebouncedSearch } from '../hooks/useDebounce';
+import { useWindowVirtualList, useResponsiveColumns, chunkArray } from '../hooks/useWindowVirtual';
 import { 
   Bookmark, 
   Plus, 
@@ -33,10 +35,11 @@ import {
 } from '../services/scryfall';
 
 interface CustomListViewProps {
+  isActive?: boolean;
   onNavigateToPickPath?: (decklistText: string) => void;
 }
 
-export const CustomListView: React.FC<CustomListViewProps> = ({ onNavigateToPickPath }) => {
+export const CustomListView: React.FC<CustomListViewProps> = React.memo(({ isActive = true, onNavigateToPickPath }) => {
   // DB subscriptions
   const [customLists, setCustomLists] = useState<CustomList[]>(() => db.getCustomLists());
   const [instances, setInstances] = useState<CardInstance[]>(() => db.getAllInstances());
@@ -48,7 +51,11 @@ export const CustomListView: React.FC<CustomListViewProps> = ({ onNavigateToPick
   // UI state
   const [viewMode, setViewMode] = useState<'grid' | 'table'>('grid');
   const [addMode, setAddMode] = useState<'type' | 'paste'>('type');
-  const [filterQuery, setFilterQuery] = useState('');
+  const {
+    input: filterQuery,
+    setInput: setFilterQuery,
+    deferred: deferredFilterQuery,
+  } = useDebouncedSearch('', 250);
   const [sortOption, setSortOption] = useState<'name' | 'price_desc' | 'count_desc' | 'added_desc'>('added_desc');
   
   // List Creation & Editing
@@ -400,8 +407,8 @@ export const CustomListView: React.FC<CustomListViewProps> = ({ onNavigateToPick
     let items = [...activeList.items];
 
     // Filter
-    if (filterQuery.trim()) {
-      const q = filterQuery.trim().toLowerCase();
+    if (deferredFilterQuery.trim()) {
+      const q = deferredFilterQuery.trim().toLowerCase();
       items = items.filter(i => 
         i.card_name.toLowerCase().includes(q) ||
         (i.notes && i.notes.toLowerCase().includes(q)) ||
@@ -427,7 +434,23 @@ export const CustomListView: React.FC<CustomListViewProps> = ({ onNavigateToPick
     });
 
     return items;
-  }, [activeList, filterQuery, sortOption]);
+  }, [activeList, deferredFilterQuery, sortOption]);
+
+  // Responsive Grid Virtualization for Custom List Visual Grid View
+  const gridCols = useResponsiveColumns(4);
+  const itemRows = useMemo(() => chunkArray(processedItems, gridCols), [processedItems, gridCols]);
+  const {
+    listRef: gridListRef,
+    virtualItems: virtualGridRows,
+    totalSize: gridTotalSize,
+    scrollMargin: gridScrollMargin,
+    virtualizer: gridVirtualizer,
+  } = useWindowVirtualList({
+    items: itemRows,
+    estimateSize: 340,
+    overscan: 2,
+    isActive: isActive && viewMode === 'grid',
+  });
 
   // Aggregate stats for active list
   const activeListStats = useMemo(() => {
@@ -852,9 +875,34 @@ export const CustomListView: React.FC<CustomListViewProps> = ({ onNavigateToPick
           </p>
         </div>
       ) : viewMode === 'grid' ? (
-        /* Visual Card Grid View */
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 sm:gap-4">
-          {processedItems.map((item) => {
+        /* Visual Card Grid View with Window Virtualization */
+        <div
+          ref={gridListRef}
+          style={{
+            height: `${gridTotalSize}px`,
+            width: '100%',
+            position: 'relative',
+          }}
+        >
+          {virtualGridRows.map((virtualRow) => {
+            const rowItems = itemRows[virtualRow.index];
+            if (!rowItems) return null;
+
+            return (
+              <div
+                key={virtualRow.key}
+                data-index={virtualRow.index}
+                ref={gridVirtualizer.measureElement}
+                className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 sm:gap-4 pb-4"
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  width: '100%',
+                  transform: `translateY(${virtualRow.start - gridScrollMargin}px)`,
+                }}
+              >
+                {rowItems.map((item) => {
             const meta = item.card_metadata;
             const physical = getPhysicalOwnership(item.card_name);
             const isEditingNote = editingNoteItemId === item.id;
@@ -1053,6 +1101,9 @@ export const CustomListView: React.FC<CustomListViewProps> = ({ onNavigateToPick
                     </div>
                   </div>
                 </div>
+              </div>
+            );
+                })}
               </div>
             );
           })}
@@ -1424,4 +1475,4 @@ export const CustomListView: React.FC<CustomListViewProps> = ({ onNavigateToPick
       )}
     </div>
   );
-};
+});

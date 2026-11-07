@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useLayoutEffect } from 'react';
+import React, { useState, useEffect, useRef, useLayoutEffect, useCallback } from 'react';
 import { Navbar } from './components/Navbar';
 import { SniperSearch } from './components/SniperSearch';
 import { PickPathRunner } from './components/PickPathRunner';
@@ -24,11 +24,30 @@ export function App() {
   // Cross-tab scroll position memory
   const scrollPositions = useRef<Record<string, number>>({});
 
-  const handleTabChange = (nextTab: 'search' | 'pickpath' | 'cabinet' | 'ingest' | 'lists') => {
-    if (nextTab === activeTab) return;
-    scrollPositions.current[activeTab] = window.scrollY;
-    setActiveTab(nextTab);
-  };
+  const handleTabChange = useCallback((nextTab: 'search' | 'pickpath' | 'cabinet' | 'ingest' | 'lists') => {
+    setActiveTab(prev => {
+      if (nextTab === prev) return prev;
+      scrollPositions.current[prev] = window.scrollY;
+      return nextTab;
+    });
+  }, []);
+
+  const handleOpenSettings = useCallback(() => {
+    setIsSettingsOpen(true);
+  }, []);
+
+  const handleCloseSettings = useCallback(() => {
+    setIsSettingsOpen(false);
+  }, []);
+
+  const handleClearPendingDecklist = useCallback(() => {
+    setPendingPickPathDecklist(null);
+  }, []);
+
+  const handleNavigateToPickPath = useCallback((text: string) => {
+    setPendingPickPathDecklist(text);
+    handleTabChange('pickpath');
+  }, [handleTabChange]);
 
   useLayoutEffect(() => {
     const targetY = scrollPositions.current[activeTab] || 0;
@@ -69,38 +88,37 @@ export function App() {
         stats={stats}
         syncStatus={syncStatus}
         uploadState={uploadState}
-        onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenSettings={handleOpenSettings}
       />
 
       <main className="flex-1 pb-16">
         <div style={{ display: activeTab === 'search' ? 'block' : 'none' }}>
-          <SniperSearch />
+          <SniperSearch isActive={activeTab === 'search'} />
         </div>
         <div style={{ display: activeTab === 'pickpath' ? 'block' : 'none' }}>
           <PickPathRunner 
+            isActive={activeTab === 'pickpath'}
             pendingDecklist={pendingPickPathDecklist || undefined}
-            onClearPendingDecklist={() => setPendingPickPathDecklist(null)}
+            onClearPendingDecklist={handleClearPendingDecklist}
           />
         </div>
         <div style={{ display: activeTab === 'cabinet' ? 'block' : 'none' }}>
-          <SkeuomorphicViewer />
+          <SkeuomorphicViewer isActive={activeTab === 'cabinet'} />
         </div>
         <div style={{ display: activeTab === 'lists' ? 'block' : 'none' }}>
           <CustomListView
-            onNavigateToPickPath={(text) => {
-              setPendingPickPathDecklist(text);
-              handleTabChange('pickpath');
-            }}
+            isActive={activeTab === 'lists'}
+            onNavigateToPickPath={handleNavigateToPickPath}
           />
         </div>
         <div style={{ display: activeTab === 'ingest' ? 'block' : 'none' }}>
-          <IngestEngine />
+          <IngestEngine isActive={activeTab === 'ingest'} />
         </div>
       </main>
 
       <SettingsSyncModal
         isOpen={isSettingsOpen}
-        onClose={() => setIsSettingsOpen(false)}
+        onClose={handleCloseSettings}
         syncStatus={syncStatus}
       />
     </div>

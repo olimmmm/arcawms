@@ -26,7 +26,11 @@ const SAMPLE_SCAN = `4 Counterspell
 
 type IngestMode = 'new_to_chaos' | 'new_to_brewing' | 'brewing_to_chaos';
 
-export const IngestEngine: React.FC = () => {
+interface IngestEngineProps {
+  isActive?: boolean;
+}
+
+export const IngestEngine: React.FC<IngestEngineProps> = React.memo(({ isActive = true }) => {
   // 3-way Ingest Mode
   const [mode, setMode] = useState<IngestMode>('new_to_chaos');
   const [importAsProxies, setImportAsProxies] = useState<boolean>(false);
@@ -755,4 +759,4 @@ export const IngestEngine: React.FC = () => {
       </div>
     </div>
   );
-};
+});

@@ -12,7 +12,7 @@ interface NavbarProps {
   onOpenSettings: () => void;
 }
 
-export const Navbar: React.FC<NavbarProps> = ({
+export const Navbar: React.FC<NavbarProps> = React.memo(({
   activeTab,
   setActiveTab,
   stats,
@@ -131,4 +131,4 @@ export const Navbar: React.FC<NavbarProps> = ({
       </div>
     </header>
   );
-};
+});

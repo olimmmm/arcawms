@@ -1,4 +1,6 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import { useDebouncedSearch } from '../hooks/useDebounce';
+import { useWindowVirtualList, useResponsiveColumns, chunkArray } from '../hooks/useWindowVirtual';
 import { 
   Boxes, 
   MapPin, 
@@ -35,7 +37,11 @@ interface UndoAction {
   timestamp: number;
 }
 
-export const SkeuomorphicViewer: React.FC = () => {
+interface SkeuomorphicViewerProps {
+  isActive?: boolean;
+}
+
+export const SkeuomorphicViewer: React.FC<SkeuomorphicViewerProps> = React.memo(({ isActive = true }) => {
   // Navigation levels:
   // level 1: cabinet (view dynamic units x 3 drawers)
   // level 2: drawer (inside open drawer, see dividers/batches)
@@ -46,9 +52,17 @@ export const SkeuomorphicViewer: React.FC = () => {
   const [selectedDrawer, setSelectedDrawer] = useState<'A' | 'B' | 'C' | null>(null);
   const [selectedBatch, setSelectedBatch] = useState<number | null>(null);
   const [isViewingBrewing, setIsViewingBrewing] = useState<boolean>(false);
-  const [brewingSearchQuery, setBrewingSearchQuery] = useState<string>('');
+  const {
+    input: brewingSearchQuery,
+    setInput: setBrewingSearchQuery,
+    deferred: deferredBrewingQuery
+  } = useDebouncedSearch('', 250);
   const [isViewingProxyBox, setIsViewingProxyBox] = useState<boolean>(false);
-  const [proxySearchQuery, setProxySearchQuery] = useState<string>('');
+  const {
+    input: proxySearchQuery,
+    setInput: setProxySearchQuery,
+    deferred: deferredProxyQuery
+  } = useDebouncedSearch('', 250);
   const [cardMenuOpenId, setCardMenuOpenId] = useState<string | null>(null);
 
   // Dynamic storage units count
@@ -171,10 +185,10 @@ export const SkeuomorphicViewer: React.FC = () => {
   }, [brewingCards, cardDictionary]);
 
   const filteredBrewingCards = useMemo(() => {
-    if (!brewingSearchQuery.trim()) return brewingCards;
-    const q = brewingSearchQuery.toLowerCase();
+    if (!deferredBrewingQuery.trim()) return brewingCards;
+    const q = deferredBrewingQuery.toLowerCase().trim();
     return brewingCards.filter(inst => inst.card_name.toLowerCase().includes(q));
-  }, [brewingCards, brewingSearchQuery]);
+  }, [brewingCards, deferredBrewingQuery]);
 
   // Cards currently in Offline Proxy Box (State P)
   const proxyBoxCards = useMemo(() => {
@@ -182,10 +196,41 @@ export const SkeuomorphicViewer: React.FC = () => {
   }, [instances]);
 
   const filteredProxyBoxCards = useMemo(() => {
-    if (!proxySearchQuery.trim()) return proxyBoxCards;
-    const q = proxySearchQuery.toLowerCase();
+    if (!deferredProxyQuery.trim()) return proxyBoxCards;
+    const q = deferredProxyQuery.toLowerCase().trim();
     return proxyBoxCards.filter(inst => inst.card_name.toLowerCase().includes(q));
-  }, [proxyBoxCards, proxySearchQuery]);
+  }, [proxyBoxCards, deferredProxyQuery]);
+
+  // Responsive Grid Virtualization for Brewing and Proxy Box Galleries
+  const galleryCols = useResponsiveColumns(4);
+  const brewingRows = useMemo(() => chunkArray(filteredBrewingCards, galleryCols), [filteredBrewingCards, galleryCols]);
+  const proxyRows = useMemo(() => chunkArray(filteredProxyBoxCards, galleryCols), [filteredProxyBoxCards, galleryCols]);
+
+  const {
+    listRef: brewingListRef,
+    virtualItems: virtualBrewingRows,
+    totalSize: brewingTotalSize,
+    scrollMargin: brewingScrollMargin,
+    virtualizer: brewingVirtualizer
+  } = useWindowVirtualList({
+    items: brewingRows,
+    estimateSize: 340,
+    overscan: 2,
+    isActive: isActive && isViewingBrewing,
+  });
+
+  const {
+    listRef: proxyListRef,
+    virtualItems: virtualProxyRows,
+    totalSize: proxyTotalSize,
+    scrollMargin: proxyScrollMargin,
+    virtualizer: proxyVirtualizer
+  } = useWindowVirtualList({
+    items: proxyRows,
+    estimateSize: 340,
+    overscan: 2,
+    isActive: isActive && isViewingProxyBox,
+  });
 
   // Close open card dropdown menu when clicking anywhere outside
   useEffect(() => {
@@ -1129,8 +1174,33 @@ export const SkeuomorphicViewer: React.FC = () => {
                   : `No cards matching "${brewingSearchQuery}" in brewing.`}
               </div>
             ) : (
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
-                {filteredBrewingCards.map((inst) => {
+              <div
+                ref={brewingListRef}
+                style={{
+                  height: `${brewingTotalSize}px`,
+                  width: '100%',
+                  position: 'relative',
+                }}
+              >
+                {virtualBrewingRows.map((virtualRow) => {
+                  const rowCards = brewingRows[virtualRow.index];
+                  if (!rowCards) return null;
+
+                  return (
+                    <div
+                      key={virtualRow.key}
+                      data-index={virtualRow.index}
+                      ref={brewingVirtualizer.measureElement}
+                      className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4 pb-4"
+                      style={{
+                        position: 'absolute',
+                        top: 0,
+                        left: 0,
+                        width: '100%',
+                        transform: `translateY(${virtualRow.start - brewingScrollMargin}px)`,
+                      }}
+                    >
+                      {rowCards.map((inst) => {
                   const meta = cardDictionary.get(inst.card_name.toLowerCase()) || cardDictionary.get(inst.oracle_id) || db.getCard(inst.card_name);
 
                   return (
@@ -1306,6 +1376,9 @@ export const SkeuomorphicViewer: React.FC = () => {
                       </div>
                     </div>
                   );
+                      })}
+                    </div>
+                  );
                 })}
               </div>
             )}
@@ -1359,8 +1432,33 @@ export const SkeuomorphicViewer: React.FC = () => {
                   : `No cards matching "${proxySearchQuery}" in Proxy Box.`}
               </div>
             ) : (
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
-                {filteredProxyBoxCards.map((inst) => {
+              <div
+                ref={proxyListRef}
+                style={{
+                  height: `${proxyTotalSize}px`,
+                  width: '100%',
+                  position: 'relative',
+                }}
+              >
+                {virtualProxyRows.map((virtualRow) => {
+                  const rowCards = proxyRows[virtualRow.index];
+                  if (!rowCards) return null;
+
+                  return (
+                    <div
+                      key={virtualRow.key}
+                      data-index={virtualRow.index}
+                      ref={proxyVirtualizer.measureElement}
+                      className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4 pb-4"
+                      style={{
+                        position: 'absolute',
+                        top: 0,
+                        left: 0,
+                        width: '100%',
+                        transform: `translateY(${virtualRow.start - proxyScrollMargin}px)`,
+                      }}
+                    >
+                      {rowCards.map((inst) => {
                   const meta = cardDictionary.get(inst.card_name.toLowerCase()) || cardDictionary.get(inst.oracle_id) || db.getCard(inst.card_name);
 
                   return (
@@ -1515,6 +1613,9 @@ export const SkeuomorphicViewer: React.FC = () => {
                           </button>
                         </div>
                       </div>
+                    </div>
+                  );
+                      })}
                     </div>
                   );
                 })}
@@ -1752,4 +1853,4 @@ export const SkeuomorphicViewer: React.FC = () => {
       )}
     </div>
   );
-};
+});
